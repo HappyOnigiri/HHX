@@ -19,6 +19,8 @@ HHX_COMPAT_TARGET=python HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレク�
 | `HHX_BIN` | 対象の hhx。既定は `bin/hhx` |
 | `HHX_COMPAT_PYTHON_HOOKS` | `python` のときに起動する Python 本体のディレクトリ |
 
+対象が `hhx` のとき、`helpers.py` は `HHX_CONFIG` を存在しないパスへ固定し、手元の `~/.config/hhx/config.yaml` を読ませない。
+
 ## 切り替えの仕組み
 
 - テストがフックを起動する経路は `helpers.hook_command(script)` に集めてある。

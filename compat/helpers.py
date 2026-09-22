@@ -87,6 +87,11 @@ GATE_SEED = "git gh curl wget core.hooksPath sleep"
 HOOK_RUN_CWD = tempfile.mkdtemp(prefix="claude-hooks-nonrepo-")
 atexit.register(shutil.rmtree, HOOK_RUN_CWD, ignore_errors=True)
 
+# hhx は起動のたびに設定ファイルを読む。開発者の ~/.config/hhx/config.yaml で結果が変わらないよう、
+# 存在しないパスを指して既定値で動かす。各テストの env は os.environ から作るので、全起動経路に効く。
+if TARGET == "hhx":
+    os.environ["HHX_CONFIG"] = os.path.join(HOOK_RUN_CWD, "hhx-config.yaml")
+
 # fixture の git 呼び出しをユーザーの設定から切り離す。
 # ~/.config/git 側で core.hooksPath が設定されているため、これを外さないと
 # テスト用リポジトリの commit で実環境の hook が走ってしまう。
