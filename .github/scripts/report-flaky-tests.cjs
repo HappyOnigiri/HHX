@@ -97,9 +97,19 @@ function marker({ owner, repo, runId, attempt, declaration }) {
 
 // アーティファクト由来の文字列をcode spanとfenced blockへ埋められる形へ均す。
 // code span内はバックスラッシュでエスケープが効かず、\` ではspanが閉じてしまうため、
-// バックティックは全角へ置き換える。
+// バックティックは全角へ置き換える。code span と fenced block の中では実体参照が解釈されないので、
+// marker の偽装を防ぐ < と > も実体参照ではなく全角へ置き換える。
+function neutralize(value) {
+  return value.replaceAll('`', '｀').replaceAll('@', '＠').replaceAll('<', '＜').replaceAll('>', '＞');
+}
+
 function sanitize(value, limit = 4000) {
-  return String(value ?? '').replace(/[\u0000-\u001f]/gu, ' ').replaceAll('`', '｀').replaceAll('@', '＠').replaceAll('<', '&lt;').replaceAll('>', '&gt;').slice(0, limit);
+  return neutralize(String(value ?? '').replace(/[\u0000-\u001f]/gu, ' ')).slice(0, limit);
+}
+
+// fenced block に埋めるログの抜粋に使う。改行だけは残し、複数行のまま読めるようにする。
+function sanitizeBlock(value, limit = 4000) {
+  return neutralize(String(value ?? '').replace(/[\u0000-\u0009\u000b-\u001f]/gu, ' ')).slice(0, limit);
 }
 
 // 地の文へ埋める値に使う。リンク・画像の記法はここでだけ解釈され、
@@ -130,12 +140,12 @@ function excerpt(manifest, recovery, jobUrl = '') {
     '',
     'Initial failure excerpt:',
     '```text',
-    sanitize(initial.log_excerpt || 'not recorded', 4000),
+    sanitizeBlock(initial.log_excerpt || 'not recorded', 4000),
     '```',
     '',
     'Retry output excerpt:',
     '```text',
-    sanitize(retry.log_excerpt || 'not recorded', 4000),
+    sanitizeBlock(retry.log_excerpt || 'not recorded', 4000),
     '```',
     `- evidence: artifact \`${sanitize(manifest.artifact_name || 'ci-test-report', 300)}\``,
     '',

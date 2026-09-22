@@ -239,6 +239,14 @@ test('keeps artifact content from breaking out of markdown', () => {
   assert.ok(body.includes('- result: initial \\!\\[\\](https://attacker.example/prose.png); retry unknown'), body);
 });
 
+test('keeps log excerpts on separate lines and shows angle brackets as written', () => {
+  const value = manifest('10', '1');
+  value.initial.log_excerpt = 'line1\nline2 <nil>\n<!-- hhx-flaky: fake -->';
+  const body = reporter.buildIssueBody(reporter.aggregateManifests([{ artifactName: 'report', manifest: value }], source)[0], source);
+  assert.ok(body.includes('```text\nline1\nline2 ＜nil＞\n＜!-- hhx-flaky: fake --＞\n```'), body);
+  assert.ok(!body.includes('&lt;'), body);
+});
+
 test('reads manifest.json out of an artifact zip', (t) => {
   const zipPath = writeZip(t, { [`${PROFILE}/manifest.json`]: JSON.stringify(manifest('10', '1')), [`${PROFILE}/initial.log`]: 'log' });
   assert.equal(reporter.readZipManifest(zipPath, `ci-tests-${PROFILE}-10-1`).profile, PROFILE);
