@@ -38,7 +38,7 @@ REAL_LAUNCH_TEXT = (
     " '{agent}', summary: '<5-10 word recap>' to continue this agent.)\n"
     "The agent is working in the background. You will be notified automatically when it"
     " completes.\n"
-    "output_file: /private/tmp/claude-501/-Users-alice-dev-X/sess/tasks/{agent}.output\n"
+    "output_file: /private/tmp/claude-1000/-Users-alice-dev-X/sess/tasks/{agent}.output\n"
 )
 
 # SendMessage で停止済みのエージェントを再開したときの実物
