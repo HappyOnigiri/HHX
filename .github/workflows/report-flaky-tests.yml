@@ -32,6 +32,8 @@ permissions:
   contents: read
   actions: read
   issues: write
+  # issue に PR のリンクを残すため、head のブランチから PR を探す。
+  pull-requests: read
 
 jobs:
   report:

@@ -371,6 +371,22 @@ async function collectCI({ github, owner, repo, runId, attempt, source, options 
   return { groups: aggregateManifests(reports, source), fatal: missing.length > 0 ? `missing report artifact for ${missing.join(', ')}` : '' };
 }
 
+// workflow run の pull_requests は PR が閉じた後などに空で返ることがある。
+// PR のイベントで空なら、head のブランチから PR を探して補う。見つからなければ空のままにする。
+async function findPullRequestUrl(github, owner, repo, sourceRun) {
+  const direct = sourceRun.pull_requests?.[0]?.html_url;
+  if (direct) return direct;
+  const headOwner = sourceRun.head_repository?.owner?.login;
+  if (!['pull_request', 'pull_request_target'].includes(sourceRun.event) || !headOwner || !sourceRun.head_branch || !github.rest.pulls?.list) return '';
+  try {
+    const pulls = (await github.rest.pulls.list({ owner, repo, state: 'all', head: `${headOwner}:${sourceRun.head_branch}`, per_page: 100 })).data || [];
+    const pull = pulls.find((item) => item.head?.sha === sourceRun.head_sha) || pulls[0];
+    return pull?.html_url || '';
+  } catch {
+    return '';
+  }
+}
+
 async function run(options) {
   const github = options.github;
   const owner = options.owner || options.context?.repo?.owner;
@@ -387,7 +403,7 @@ async function run(options) {
   if (sourceRun.run_attempt && String(sourceRun.run_attempt) !== attempt) throw new Error('source run attempt does not match requested attempt');
   const source = {
     owner, repo, runId, attempt, event: sourceRun.event || '', ref: sourceRun.head_branch || sourceRun.head_sha || '',
-    apiHeadSha: sourceRun.head_sha || '', prUrl: sourceRun.pull_requests?.[0]?.html_url || '', runUrl: sourceRun.html_url || `https://github.com/${owner}/${repo}/actions/runs/${runId}`,
+    apiHeadSha: sourceRun.head_sha || '', prUrl: await findPullRequestUrl(github, owner, repo, sourceRun), runUrl: sourceRun.html_url || `https://github.com/${owner}/${repo}/actions/runs/${runId}`,
     commitUrl: sourceRun.head_sha ? `https://github.com/${owner}/${repo}/commit/${sourceRun.head_sha}` : '',
     summary: (message) => options.core?.warning?.(message),
   };

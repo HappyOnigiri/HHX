@@ -82,7 +82,7 @@ function ciJob(overrides = {}) {
 
 // fakeGitHub は reporter が呼ぶ Actions と issue の API を、メモリ上の状態で置き換える。
 // views を渡すと、issue の一覧 API はその中身を先頭から1回ずつ返す。反映の遅れた一覧を再現するのに使う。
-function fakeGitHub({ run = sourceRun, jobs = [ciJob()], artifacts, issues = [], comments = new Map(), calls = [], views = [] } = {}) {
+function fakeGitHub({ run = sourceRun, jobs = [ciJob()], artifacts, issues = [], comments = new Map(), calls = [], views = [], pulls = [] } = {}) {
   let currentRun = '10';
   return { rest: {
     actions: {
@@ -91,6 +91,9 @@ function fakeGitHub({ run = sourceRun, jobs = [ciJob()], artifacts, issues = [],
       listWorkflowRunArtifacts: async () => ({ data: { artifacts: artifacts ?? [
         { id: 1, name: `ci-tests-${PROFILE}-${currentRun}-1`, expired: false, workflow_run: { id: Number(currentRun) } },
       ] } }),
+    },
+    pulls: {
+      list: async ({ head }) => ({ data: pulls.filter((item) => item.head.label === head) }),
     },
     issues: {
       listForRepo: async () => ({ data: views.length > 0 ? views.shift() : [...issues] }),
@@ -230,6 +233,16 @@ test('rejects a workflow that is not in the contract table', async () => {
 test('accepts a workflow path that carries a ref', async () => {
   const github = fakeGitHub({ run: (id) => sourceRun(id, { path: '.github/workflows/ci.yml@main' }) });
   assert.deepEqual((await reporter.run(runOptions(github))).results.map((item) => item.action), ['created']);
+});
+
+test('finds the pull request of a pull_request run whose pull_requests is empty', async () => {
+  const headSha = 'fedcba9876543210fedcba9876543210fedcba98';
+  const github = fakeGitHub({
+    run: (id) => sourceRun(id, { event: 'pull_request', head_branch: 'topic', head_sha: headSha, pull_requests: [], head_repository: { owner: { login: OWNER } } }),
+    pulls: [{ html_url: `https://github.com/${OWNER}/${REPO}/pull/4`, head: { label: `${OWNER}:topic`, sha: headSha } }],
+  });
+  const result = await reporter.run(runOptions(github));
+  assert.equal(result.source.prUrl, `https://github.com/${OWNER}/${REPO}/pull/4`);
 });
 
 test('rejects a source run that has not completed', async () => {
