@@ -336,6 +336,7 @@ func TestHookCommandQuotesPaths(t *testing.T) {
 func TestIsHHXHookCommand(t *testing.T) {
 	for command, want := range map[string]bool{
 		"/Users/me/.local/bin/hhx hook pr-merge-guard":   true,
+		"/opt/bà/hhx hook x":                             true,
 		`"/Users/me/My Tools/hhx" hook pr-merge-guard`:   true,
 		`"$HOME/.local/bin/hhx" hook pr-merge-guard`:     true,
 		"hhx hook anything":                              true,

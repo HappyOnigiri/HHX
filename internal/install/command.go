@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"unicode"
 )
 
 // executableName は hhx のエントリを見分けるための先頭トークンの basename である。
@@ -97,7 +96,9 @@ func splitHookCommand(command string) ([]string, bool) {
 		case char == '\'' || char == '"':
 			quote = char
 			started = true
-		case unicode.IsSpace(rune(char)):
+		// shell の既定の区切り（IFS）に合わせ、ASCII の空白とタブだけで区切る。バイト単位で見るため、
+		// unicode.IsSpace では UTF-8 の継続バイト（0x85・0xA0）を空白と取り違える。
+		case char == ' ' || char == '\t':
 			if started {
 				fields = append(fields, field.String())
 				field.Reset()
