@@ -41,4 +41,7 @@ type Definition struct {
 	Gate func(input []byte) bool
 	// Run は hook の本体である。エラーを返すか panic すると、出力を捨てて無出力で終わる（fail-open）。
 	Run func(*Context) error
+	// NewSettings は Context.Settings へ渡す hook 固有の設定の零値を返す。nil なら hook 固有の設定を持たない。
+	// install はこれで設定を読み込み、型の誤りを報告する（実行時は無出力で終わるため、気付く機会が install しかない）。
+	NewSettings func() any
 }

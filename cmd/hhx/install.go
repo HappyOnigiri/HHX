@@ -23,7 +23,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	// 実行時の hook は壊れた設定を既定値で読み流すため、壊れていることに気付く機会は install しかない。
-	if err := validateConfig(); err != nil {
+	if err := validateConfig(registry.All()); err != nil {
 		_, _ = fmt.Fprintf(stderr, "hhx install: %v\n", err)
 		return 1
 	}
@@ -143,7 +143,8 @@ func installOptions() (install.Options, error) {
 	}, nil
 }
 
-func validateConfig() error {
+// validateConfig は設定ファイルの構文、hook 名の綴り、hook 固有の設定の型を definitions に照らして確かめる。
+func validateConfig(definitions []hookrt.Definition) error {
 	path, err := config.DefaultPath()
 	if err != nil {
 		return err
@@ -152,8 +153,20 @@ func validateConfig() error {
 	if err != nil {
 		return err
 	}
-	if unknown := cfg.UnknownHooks(registry.Known); len(unknown) > 0 {
+	known := map[string]bool{}
+	for _, definition := range definitions {
+		known[definition.Name] = true
+	}
+	if unknown := cfg.UnknownHooks(func(name string) bool { return known[name] }); len(unknown) > 0 {
 		return fmt.Errorf("%s: unknown hooks: %s", path, strings.Join(unknown, ", "))
+	}
+	for _, definition := range definitions {
+		if definition.NewSettings == nil {
+			continue
+		}
+		if err := cfg.Decode(definition.Name, definition.NewSettings()); err != nil {
+			return fmt.Errorf("%s: hooks.%s: %v", path, definition.Name, err)
+		}
 	}
 	return nil
 }

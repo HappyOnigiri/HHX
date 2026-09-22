@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/HappyOnigiri/hhx/internal/hookrt"
 )
 
 func runCommand(t *testing.T, stdin string, args ...string) (int, string, string) {
@@ -102,6 +104,26 @@ func TestInstallRejectsBrokenConfig(t *testing.T) {
 	// 実行時の hook は壊れた設定でも止まらない。
 	if code, stdout, _ := runCommand(t, "{}", "hook", "no-such-hook"); code != 0 || stdout != "" {
 		t.Fatalf("hook: code=%d stdout=%q", code, stdout)
+	}
+}
+
+func TestValidateConfigReportsHookSettingTypes(t *testing.T) {
+	home, _ := isolate(t)
+	path := filepath.Join(home, "config.yaml")
+	if err := os.WriteFile(path, []byte("hooks:\n  limited:\n    limit: abc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HHX_CONFIG", path)
+	type settings struct {
+		Limit int `yaml:"limit"`
+	}
+	definitions := []hookrt.Definition{{Name: "limited", NewSettings: func() any { return &settings{} }}}
+	if err := validateConfig(definitions); err == nil || !strings.Contains(err.Error(), "hooks.limited") {
+		t.Fatalf("validateConfig()=%v, want an error for hooks.limited", err)
+	}
+	definitions[0].NewSettings = nil
+	if err := validateConfig(definitions); err != nil {
+		t.Fatalf("hook without settings: validateConfig()=%v", err)
 	}
 }
 
