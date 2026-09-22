@@ -23,9 +23,10 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `internal/registry`: hook の一覧。install と `hhx hook` の振り分けはここから作る
 - `internal/install`: Claude の settings.json と Codex の hooks.json の読み書き
 - `internal/config`: `~/.config/hhx/config.yaml` の読み込み
+- `compat/`: 移行期間だけ置く Python の互換スイート（[compat/README.md](compat/README.md)）
 
 ## 開発
 
-- 確認は `make check`（書式・vet・Go のテスト）。
+- 確認は `make check`（書式・vet・Go のテスト・互換スイート）。
 - install のテストは一時的な HOME で行い、実機の設定ファイルに触れない。
 - コメントは日本語で書き、保守に必要な意図・制約・契約だけを残す。
