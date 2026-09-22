@@ -91,16 +91,17 @@ func retryFailures(
 		} else if recovered, reason := retryRecovered(result, packageName, names); recovered {
 			retry.Recovered = true
 			retry.PassedTests = append([]string(nil), names...)
-			for _, name := range names {
-				recoveredNames[packageName][name] = true
-			}
 			if coverage != "" {
 				if err := mergeCoverage(cfg.CoverageProfile, filepath.Join(cfg.ReportDir, coverage)); err != nil {
 					retry.Recovered = false
 					retry.Reason = "coverage merge failed: " + err.Error()
 				}
 			}
+			// カバレッジを合算できなかった再実行は未回復として数え、statusをfailedに残す。
 			if retry.Recovered {
+				for _, name := range names {
+					recoveredNames[packageName][name] = true
+				}
 				for root, declaration := range resolved[packageName] {
 					man.Recoveries = append(man.Recoveries, recovery{
 						Package:       packageName,

@@ -136,6 +136,40 @@ func TestRacy(t *testing.T) {
 	}
 }
 
+// 初回の失敗でソースを書き換え、再実行のカバレッジが同じ位置で別の文の数を持つようにする。
+// 合算に失敗した再実行は回復扱いにせず、CIを失敗させる。
+func TestCoverageMergeFailureKeepsFailure(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "first-run")
+	root := writeTree(t, map[string]string{
+		"lib.go": "package example\n\nfunc F() int {\n\ta := 1\n\treturn a\n}\n",
+		"flaky_test.go": `package example
+
+import (
+	"os"
+	"testing"
+)
+
+func TestFlaky(t *testing.T) {
+	_ = F()
+	path := os.Getenv("FLAKY_MARKER")
+	if _, err := os.Stat(path); err != nil {
+		if err := os.WriteFile(path, []byte("seen"), 0o600); err != nil { t.Fatal(err) }
+		if err := os.WriteFile("lib.go", []byte("package example\n\nfunc F() int {\n\ta := 1; a++\n\treturn a\n}\n"), 0o600); err != nil { t.Fatal(err) }
+		t.Fatal("first run fails")
+	}
+}
+`,
+	})
+	t.Setenv("FLAKY_MARKER", marker)
+	code, value := runFixture(t, root)
+	if code == 0 || value.Status != "failed" || len(value.Recoveries) != 0 || len(value.Retries) != 1 {
+		t.Fatalf("code=%d status=%s recoveries=%d retries=%d", code, value.Status, len(value.Recoveries), len(value.Retries))
+	}
+	if !strings.Contains(value.Retries[0].Reason, "coverage merge failed") {
+		t.Fatalf("retry reason=%q", value.Retries[0].Reason)
+	}
+}
+
 func TestStableTestDoesNotRetry(t *testing.T) {
 	root := writeFixture(t, `package example
 
