@@ -19,7 +19,7 @@ class HHXTargetTest(unittest.TestCase):
 
     def test_unported_hook_is_skipped(self):
         with self.assertRaises(unittest.SkipTest):
-            helpers.hook_command("pr-merge-guard.py")
+            helpers.hook_command("dangerous-rm-guard.py")
 
     def test_l2_is_skipped_on_use(self):
         module = load_hook("pr-merge-guard.py")

@@ -8,7 +8,9 @@ LDFLAGS := -s -w -X github.com/HappyOnigiri/hhx/internal/version.Version=$(VERSI
 # カバレッジの閾値と対象。hook を移植するときは、そのパッケージを一覧へ足す。
 GO_COVERAGE_MIN ?= 85.0
 GO_COVERAGE_PACKAGES := ./cmd/hhx ./internal/config ./internal/hookrt ./internal/install ./internal/registry \
-	./internal/update ./internal/version
+	./internal/update ./internal/version ./internal/pycompat \
+	./internal/hooks/prmergeguard ./internal/hooks/idlewaitguard ./internal/hooks/forbiddentermguard \
+	./internal/hooks/githookspathguard
 GOLANGCI_LINT_VERSION := $(shell awk '$$1 == "golangci-lint" { print $$2 }' .tool-versions)
 GOLANGCI_LINT := bin/golangci-lint
 # CI は CITEST に citest のパスを渡し、落ちたテストだけを 1 回再実行して報告を CI_TEST_ARTIFACT_DIR に残す。

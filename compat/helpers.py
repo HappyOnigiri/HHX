@@ -34,7 +34,15 @@ if TARGET not in ("hhx", "python"):
     raise RuntimeError(f"HHX_COMPAT_TARGET は hhx か python: {TARGET!r}")
 
 # hhx へ移植済みの hook 名。移植した hook はここへ足し、その L1・L3 を hhx に向けて全件通す。
-PORTED_HOOKS = frozenset()
+PORTED_HOOKS = frozenset({
+    "forbidden-term-guard",
+    "git-hookspath-guard",
+    "idle-wait-guard",
+    "pr-merge-guard",
+})
+
+# hhx で既定では無効な hook。Python 実装は常に有効なので、互換スイートでは設定ファイルで有効にして流す。
+DEFAULT_OFF_HOOKS = ("git-hookspath-guard",)
 
 # Python 本体のファイル名と hhx の hook 名が違うもの。それ以外は拡張子を除いた名前をそのまま使う。
 HOOK_NAMES = {
@@ -88,9 +96,11 @@ HOOK_RUN_CWD = tempfile.mkdtemp(prefix="claude-hooks-nonrepo-")
 atexit.register(shutil.rmtree, HOOK_RUN_CWD, ignore_errors=True)
 
 # hhx は起動のたびに設定ファイルを読む。開発者の ~/.config/hhx/config.yaml で結果が変わらないよう、
-# 存在しないパスを指して既定値で動かす。各テストの env は os.environ から作るので、全起動経路に効く。
+# 一時的な設定ファイルを指し、既定で無効な hook だけを有効にする。各テストの env は os.environ から作るので、全起動経路に効く。
 if TARGET == "hhx":
     os.environ["HHX_CONFIG"] = os.path.join(HOOK_RUN_CWD, "hhx-config.yaml")
+    with open(os.environ["HHX_CONFIG"], "w", encoding="utf-8") as _config:
+        _config.write("hooks:\n" + "".join(f"  {name}:\n    enabled: true\n" for name in DEFAULT_OFF_HOOKS))
 
 # fixture の git 呼び出しをユーザーの設定から切り離す。
 # ~/.config/git 側で core.hooksPath が設定されているため、これを外さないと

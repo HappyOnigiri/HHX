@@ -1,0 +1,341 @@
+package forbiddentermguard
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/HappyOnigiri/hhx/internal/hooktest"
+)
+
+// term は架空の禁止語である。テストには実際の語を書かない。
+const term = "acme-internal"
+
+// newRepo は語リストを持つリポジトリ（.git ディレクトリだけのもの）を作る。terms が空なら語リストを置かない。
+func newRepo(t *testing.T, terms ...string) string {
+	t.Helper()
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if len(terms) > 0 {
+		writeFile(t, filepath.Join(repo, ".git", termsFileName), strings.Join(terms, "\n")+"\n")
+	}
+	return repo
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runIn(t *testing.T, cwd, command string) hooktest.Result {
+	t.Helper()
+	return hooktest.Stdin(t, Definition(), hooktest.BashPayload(command, cwd, nil))
+}
+
+func TestBlocksPRAndIssueBodies(t *testing.T) {
+	repo := newRepo(t, term)
+	hooktest.CheckTable(t, Definition(), hooktest.Deny, repo, hooktest.Commands(
+		`gh pr create --title "fix" --body "closes `+term+`#12"`,
+		`gh pr create --body "`+term+`"`,
+		`gh pr edit 12 --body "`+term+` の対応"`,
+		`gh pr comment 12 --body "`+term+`"`,
+		`gh issue create --title "`+term+`" --body "x"`,
+		`gh issue comment 3 --body "`+term+`"`,
+		`gh api repos/o/r/pulls -f body="`+term+`"`,
+		`/opt/homebrew/bin/gh pr create --body "`+term+`"`,
+		`cd sub && gh pr create --body "`+term+`"`,
+		`gh pr create --body "`+strings.ToUpper(term)+`"`,
+		"gh　pr create --body "+term,
+		"gh api\n"+term,
+	))
+}
+
+func TestBodyFileContents(t *testing.T) {
+	repo := newRepo(t, term)
+	body := filepath.Join(repo, "body.md")
+	writeFile(t, body, "## 概要\n\n"+term+" を直した\n")
+	for _, command := range []string{
+		"gh pr create --title x --body-file body.md",
+		"gh pr create --title x --body-file " + body,
+		"gh pr edit 12 --body-file=body.md",
+		"gh issue comment 3 -F body.md",
+		`gh issue comment 3 -F "body.md"`,
+	} {
+		got := runIn(t, repo, command)
+		// 何行目かまで出す。
+		if got.Decision != hooktest.Deny || !strings.Contains(got.Reason, ":3: "+term+" を直した") {
+			t.Errorf("%q: %+v", command, got)
+		}
+	}
+}
+
+func TestBodyFileLimitsAndStdin(t *testing.T) {
+	repo := newRepo(t, term)
+	writeFile(t, filepath.Join(repo, "large.md"), term+"\n"+strings.Repeat("x", maxBodyBytes))
+	for _, command := range []string{
+		"gh pr create --body-file large.md",
+		"gh pr create --body-file -",
+		"gh pr create --body-file missing.md",
+		"gh pr create --body-file .",
+	} {
+		if got := runIn(t, repo, command); got.Decision != "" {
+			t.Errorf("%q: %+v", command, got)
+		}
+	}
+}
+
+func TestRegexEntry(t *testing.T) {
+	repo := newRepo(t, "re:acme[-_ ]?corp")
+	if got := runIn(t, repo, `gh pr create --body "AcmeCorp のこと"`); got.Decision != hooktest.Deny {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// linked worktree からでも、共通の git ディレクトリの語リストを読む。
+func TestLinkedWorktreeUsesCommonDir(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	git := func(args ...string) {
+		t.Helper()
+		command := exec.CommandContext(t.Context(), "git", append([]string{"-C", repo,
+			"-c", "user.name=hook-test", "-c", "user.email=hook-test@example.com", "-c", "commit.gpgsign=false"}, args...)...)
+		command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git("init", "-q")
+	git("commit", "-q", "--allow-empty", "-m", "init")
+	writeFile(t, filepath.Join(repo, ".git", termsFileName), term+"\n")
+	worktree := filepath.Join(root, "wt")
+	git("worktree", "add", "-q", "--detach", worktree)
+	if got := runIn(t, worktree, `gh pr create --body "`+term+`"`); got.Decision != hooktest.Deny {
+		t.Fatalf("%+v", got)
+	}
+	// linked worktree の下のディレクトリからでも辿れる。
+	sub := filepath.Join(worktree, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := runIn(t, sub, `gh pr create --body "`+term+`"`); got.Decision != hooktest.Deny {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestCommonDirResolution(t *testing.T) {
+	root := t.TempDir()
+	common := filepath.Join(root, "main", ".git")
+	writeFile(t, filepath.Join(common, "HEAD"), "ref: refs/heads/main\n")
+	linked := filepath.Join(common, "worktrees", "wt")
+	writeFile(t, filepath.Join(linked, "commondir"), "../..\n")
+	// 相対の gitdir: と、CRLF の改行を解決する。
+	writeFile(t, filepath.Join(root, "wt", ".git"), "gitdir: ../main/.git/worktrees/wt\r\n")
+	writeFile(t, filepath.Join(root, "abs", ".git"), "gitdir: "+linked+"\n")
+	writeFile(t, filepath.Join(root, "broken", ".git"), "not a gitdir line\n")
+	writeFile(t, filepath.Join(root, "plain", ".keep"), "")
+	for start, want := range map[string]string{
+		filepath.Join(root, "main"):           common,
+		filepath.Join(root, "main", "a", "b"): common,
+		filepath.Join(root, "wt"):             common,
+		filepath.Join(root, "abs"):            common,
+		filepath.Join(root, "broken"):         "",
+		"":                                    "",
+	} {
+		if err := os.MkdirAll(start, 0o755); start != "" && err != nil {
+			t.Fatal(err)
+		}
+		if got := commonDir(start); got != want {
+			t.Errorf("commonDir(%q)=%q, want %q", start, got, want)
+		}
+	}
+	// commondir が無い（あるいは空の）git ディレクトリは、それ自体が共通のディレクトリである。
+	writeFile(t, filepath.Join(root, "empty", ".git"), "gitdir: "+filepath.Join(root, "emptydir")+"\n")
+	writeFile(t, filepath.Join(root, "emptydir", "commondir"), "\n")
+	if got := commonDir(filepath.Join(root, "empty")); got != filepath.Join(root, "emptydir") {
+		t.Errorf("empty commondir: %q", got)
+	}
+}
+
+// 通す側。誤爆がこの hook の実害なので厚めに見る。
+func TestAllowsCleanBodies(t *testing.T) {
+	repo := newRepo(t, term)
+	hooktest.CheckTable(t, Definition(), "", repo, hooktest.Commands(
+		`gh pr create --title "fix" --body "バグを直した"`,
+		"gh pr edit 12 --body-file body.md",
+		"gh pr view 12",
+		"gh pr list",
+		"gh pr checkout 12",
+		// 語の一部として続くサブコマンドは対象外（Python の \b と同じ語の境界）。
+		"gh apix "+term,
+		"gh apié "+term,
+	))
+}
+
+// git の hook が受け持つ操作と、送信を伴わない操作は対象外。
+func TestAllowsOtherCommandsWithTheTerm(t *testing.T) {
+	repo := newRepo(t, term)
+	hooktest.CheckTable(t, Definition(), "", repo, hooktest.Commands(
+		`git commit -m "`+term+`"`,
+		"git push origin feature/"+term,
+		"grep -r "+term+" .",
+		`echo "`+term+`" > note.txt`,
+	))
+}
+
+// 語リストの無いリポジトリと、git の管理外では何もしない。
+func TestOptIn(t *testing.T) {
+	repo := newRepo(t)
+	if got := runIn(t, repo, `gh pr create --body "`+term+`"`); got.Decision != "" {
+		t.Errorf("repo without terms: %+v", got)
+	}
+	outside := t.TempDir()
+	if got := runIn(t, outside, `gh pr create --body "`+term+`"`); got.Decision != "" {
+		t.Errorf("outside a repository: %+v", got)
+	}
+	empty := newRepo(t, "# comment only", "", "re:")
+	if got := runIn(t, empty, `gh pr create --body "`+term+`"`); got.Decision != "" {
+		t.Errorf("terms file without terms: %+v", got)
+	}
+}
+
+func TestParseTerms(t *testing.T) {
+	terms := parseTerms("# comment\r\n\r\n  " + term + "  \rre:  foo\\d+bar \nre:(?<=x)y\nre:[unclosed\nRe:literal\n")
+	for text, want := range map[string]bool{
+		strings.ToUpper(term): true,
+		"FOO12BAR":            true,
+		"foobar":              false,
+		// RE2 で使えない後読みは飛ばす。
+		"xy":                   false,
+		"[unclosed":            false,
+		"re:literal":           true,
+		"Re:LITERAL":           true,
+		"# comment":            false,
+		"  " + term + "  more": true,
+	} {
+		if got := matchesAny(text, terms); got != want {
+			t.Errorf("matchesAny(%q)=%v, want %v", text, got, want)
+		}
+	}
+	// コンパイルできない re: は飛ばし、ほかの語の検査を続ける。
+	if len(terms) != 3 {
+		t.Errorf("got %d terms, want 3", len(terms))
+	}
+}
+
+func TestReasonFormat(t *testing.T) {
+	repo := newRepo(t, term)
+	var lines []string
+	for index := 0; index < 12; index++ {
+		lines = append(lines, term)
+	}
+	lines = append(lines, strings.Repeat("あ", 250)+term)
+	got := runIn(t, repo, "gh pr create --body '"+strings.Join(lines, "\n")+"'")
+	if got.Decision != hooktest.Deny {
+		t.Fatalf("%+v", got)
+	}
+	termsPath := filepath.Join(repo, ".git", termsFileName)
+	for _, part := range []string{
+		"❌ ブロック: 禁止語を含む本文の送信\n\n該当箇所:\n  command:1: gh pr create --body '" + term + "\n  command:2: " + term + "\n",
+		"  command:10: " + term + "\n  … 他 3 件\n\n",
+		"理由: " + why + " (語リスト: " + termsPath + ")\n\n対応: " + how,
+	} {
+		if !strings.Contains(got.Reason, part) {
+			t.Errorf("reason %q does not contain %q", got.Reason, part)
+		}
+	}
+	if clipped := clip(strings.Repeat("あ", 250)); clipped != strings.Repeat("あ", 200)+" …" {
+		t.Errorf("clip: %q", clipped)
+	}
+	if clipped := clip("  short  "); clipped != "short" {
+		t.Errorf("clip: %q", clipped)
+	}
+}
+
+func TestArgvPathUsesProcessCWD(t *testing.T) {
+	repo := newRepo(t, term)
+	t.Chdir(repo)
+	if got := hooktest.Argv(t, Definition(), `gh pr create --body "`+term+`"`); got.Decision != hooktest.Deny {
+		t.Errorf("argv: %+v", got)
+	}
+	// argv に payload の JSON を渡したときは payload として読む。
+	payload := hooktest.BashPayload(`gh pr create --body "`+term+`"`, t.TempDir(), nil)
+	if got := hooktest.Argv(t, Definition(), payload); got.Decision != "" {
+		t.Errorf("argv payload must use its cwd: %+v", got)
+	}
+}
+
+// payload の cwd が空なら、プロセスの cwd を使う。
+func TestEmptyCWDFallsBackToProcessCWD(t *testing.T) {
+	repo := newRepo(t, term)
+	t.Chdir(repo)
+	for _, cwd := range []string{`""`, "null", "0", "false"} {
+		raw := `{"tool_input": {"command": "gh pr create --body ` + term + `"}, "cwd": ` + cwd + `}`
+		if got := hooktest.Stdin(t, Definition(), raw); got.Decision != hooktest.Deny {
+			t.Errorf("cwd %s: %+v", cwd, got)
+		}
+	}
+	raw := `{"tool_input": {"command": "gh pr create --body ` + term + `"}}`
+	if got := hooktest.Stdin(t, Definition(), raw); got.Decision != hooktest.Deny {
+		t.Errorf("missing cwd: %+v", got)
+	}
+}
+
+func TestOddInputsDoNotCrash(t *testing.T) {
+	repo := newRepo(t, term)
+	t.Chdir(repo)
+	for _, raw := range []string{
+		"", "   ", "gh pr create --body " + term, "[]", "null", "0", `"gh"`,
+		`{"tool_input": {"command": null}, "x": "gh"}`,
+		`{"tool_input": {"command": 123}, "x": "gh"}`,
+		`{"tool_input": "gh pr create --body ` + term + `"}`,
+		`{"tool_input": null, "x": "gh"}`,
+		`{"tool_input": {"command": "gh pr create --body ` + term + `"}, "cwd": 1}`,
+		`{"tool_input": {"command": "gh pr create --body ` + term + `"}, "cwd": ["x"]}`,
+	} {
+		if got := hooktest.Stdin(t, Definition(), raw); got.Decision != "" {
+			t.Errorf("odd input %q: %+v", raw, got)
+		}
+	}
+}
+
+func TestExpandUser(t *testing.T) {
+	t.Setenv("HOME", "/Users/alice")
+	for path, want := range map[string]string{
+		"~":                            "/Users/alice",
+		"~/body.md":                    "/Users/alice/body.md",
+		"/tmp/x":                       "/tmp/x",
+		"relative/~":                   "relative/~",
+		"~no-such-user-for-hhx-test/x": "~no-such-user-for-hhx-test/x",
+	} {
+		if got := expandUser(path); got != want {
+			t.Errorf("expandUser(%q)=%q, want %q", path, got, want)
+		}
+	}
+	// 相対パスは cwd に繋ぐので、先頭の ~ は展開されない（移植元と同じ）。
+	files := bodyFiles("gh pr create --body-file ~/body.md -F /abs/x.md", "/work")
+	if len(files) != 2 || files[0].path != "/work/~/body.md" || files[1].path != "/abs/x.md" {
+		t.Errorf("bodyFiles: %+v", files)
+	}
+}
+
+func TestDisabledByConfig(t *testing.T) {
+	repo := newRepo(t, term)
+	got := hooktest.Run(t, Definition(), hooktest.BashPayload("gh pr create --body "+term, repo, nil), hooktest.Options{
+		Config: "hooks:\n  forbidden-term-guard:\n    enabled: false\n",
+	})
+	if got.Decision != "" {
+		t.Fatalf("disabled hook must write nothing: %+v", got)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	"github.com/HappyOnigiri/hhx/internal/registry"
 )
 
 func runCommand(t *testing.T, stdin string, args ...string) (int, string, string) {
@@ -55,8 +56,8 @@ func TestVersionAndUsage(t *testing.T) {
 	}
 }
 
-func TestInstallAndUninstallWithEmptyRegistry(t *testing.T) {
-	home, _ := isolate(t)
+func TestInstallAndUninstallRegisteredHooks(t *testing.T) {
+	home, binary := isolate(t)
 	settings := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
 		t.Fatal(err)
@@ -65,18 +66,52 @@ func TestInstallAndUninstallWithEmptyRegistry(t *testing.T) {
 	if err := os.WriteFile(settings, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, command := range []string{"install", "uninstall", "install"} {
-		code, stdout, stderr := runCommand(t, "", command)
-		if code != 0 || !strings.Contains(stdout, "claude: "+settings+" (unchanged)") {
-			t.Fatalf("%s: code=%d stdout=%q stderr=%q", command, code, stdout, stderr)
+	for _, step := range []struct{ command, state string }{
+		{"install", "updated"}, {"install", "unchanged"}, {"uninstall", "updated"}, {"uninstall", "unchanged"},
+	} {
+		code, stdout, stderr := runCommand(t, "", step.command)
+		if code != 0 || !strings.Contains(stdout, "claude: "+settings+" ("+step.state+")") {
+			t.Fatalf("%s: code=%d stdout=%q stderr=%q", step.command, code, stdout, stderr)
 		}
 		if strings.Contains(stdout, "codex") {
-			t.Fatalf("%s must skip agents without a config directory: %q", command, stdout)
+			t.Fatalf("%s must skip agents without a config directory: %q", step.command, stdout)
+		}
+		if step.command != "install" {
+			continue
+		}
+		data, err := os.ReadFile(settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, definition := range registry.All() {
+			if !strings.Contains(string(data), binary+" hook "+definition.Name) {
+				t.Fatalf("install did not register %s: %s", definition.Name, data)
+			}
 		}
 	}
 	data, err := os.ReadFile(settings)
-	if err != nil || string(data) != original {
-		t.Fatalf("settings changed: %q", data)
+	if err != nil || strings.Contains(string(data), " hook ") || !strings.Contains(string(data), `"model": "opus"`) {
+		t.Fatalf("uninstall must remove only hhx entries: %q", data)
+	}
+}
+
+// `hhx hook <name>` が登録表の hook へ振り分けられ、stdin と argv の両方の経路で判定することを確かめる。
+func TestHookDispatchesToRegisteredHook(t *testing.T) {
+	isolate(t)
+	t.Setenv("AGENT_ALLOW_PR_MERGE", "")
+	payload := `{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1"}}`
+	code, stdout, stderr := runCommand(t, payload, "hook", "pr-merge-guard")
+	if code != 0 || !strings.Contains(stdout, `"permissionDecision":"deny"`) || stderr != "" {
+		t.Fatalf("stdin: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	code, stdout, _ = runCommand(t, "", "hook", "idle-wait-guard", "echo ok")
+	if code != 0 || !strings.Contains(stdout, `"permissionDecision":"deny"`) {
+		t.Fatalf("argv: code=%d stdout=%q", code, stdout)
+	}
+	// git-hookspath-guard は既定で無効である。
+	code, stdout, _ = runCommand(t, "", "hook", "git-hookspath-guard", "git config core.hooksPath x")
+	if code != 0 || stdout != "" {
+		t.Fatalf("default-off hook: code=%d stdout=%q", code, stdout)
 	}
 }
 
