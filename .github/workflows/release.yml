@@ -34,7 +34,7 @@ jobs:
     steps:
       # バージョンの真実源はタグである。リポジトリにバージョンを書いた manifest を持たないため
       # version-bump-type は none とし、リリース PR はバージョンを刻む差分を持たない空コミットになる。
-      - uses: HappyOnigiri/ReleaseActions/actions/prepare-release@main
+      - uses: HappyOnigiri/ReleaseActions/actions/prepare-release@629b3cc65926d0ce0d2a08ca9dbd09ad2cc37855
         with:
           version: ${{ inputs.version }}
           # 共通 Action は version と bump の同時指定を拒むため、version を入れた実行では bump を none へ落とす。
