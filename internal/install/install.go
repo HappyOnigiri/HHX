@@ -37,22 +37,13 @@ type Result struct {
 }
 
 // TargetPath は agent の hook 設定の読み書き先を、ファイルが存在しなくても返す。
-// Claude は ~/.claude/settings.local.json があるとそちらを優先して読むため、書き込み先もそちらに揃える。
+// Claude のユーザースコープの設定は ~/.claude/settings.json だけである。
+// ~/.claude/settings.local.json は $HOME をプロジェクトとして開いたときの local 設定なので、書き込み先にしない。
 func TargetPath(home string, agent hookrt.Agent) (string, error) {
 	switch agent {
 	case hookrt.Codex:
 		return filepath.Join(home, ".codex", "hooks.json"), nil
 	case hookrt.Claude:
-		local := filepath.Join(home, ".claude", "settings.local.json")
-		info, err := os.Stat(local)
-		switch {
-		case err == nil && info.Mode().IsRegular():
-			return local, nil
-		case err == nil:
-			return "", fmt.Errorf("%s is not a regular file", local)
-		case !errors.Is(err, os.ErrNotExist):
-			return "", err
-		}
 		return filepath.Join(home, ".claude", "settings.json"), nil
 	default:
 		return "", fmt.Errorf("unsupported agent %q", agent)

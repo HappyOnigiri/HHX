@@ -323,18 +323,18 @@ func TestIsHHXHookCommand(t *testing.T) {
 	}
 }
 
-func TestClaudePrefersLocalSettings(t *testing.T) {
+func TestClaudeIgnoresLocalSettings(t *testing.T) {
 	options := testOptions(t)
 	local := filepath.Join(options.Home, ".claude", "settings.local.json")
 	shared := filepath.Join(options.Home, ".claude", "settings.json")
 	writeFile(t, shared, "{}\n")
 	writeFile(t, local, "{}\n")
 	result := mustInstall(t, options, hookrt.Claude, testDefinitions())
-	if result.Path != local {
-		t.Fatalf("Claude must write settings.local.json when it exists, wrote %s", result.Path)
+	if result.Path != shared {
+		t.Fatalf("Claude must write settings.json even when settings.local.json exists, wrote %s", result.Path)
 	}
-	if got := readFile(t, shared); got != "{}\n" {
-		t.Fatal("settings.json must stay untouched")
+	if got := readFile(t, local); got != "{}\n" {
+		t.Fatal("settings.local.json must stay untouched")
 	}
 }
 

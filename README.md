@@ -15,7 +15,7 @@ hhx install         # registers hhx hooks in ~/.claude/settings.json and ~/.code
 `hhx install` writes only its own hook groups and leaves every other hook untouched.
 It is idempotent: running it again without changes does not modify the files.
 By default it configures each agent whose config directory (`~/.claude`, `~/.codex`) exists; pass `--agent claude` or `--agent codex` to choose.
-When `~/.claude/settings.local.json` exists, Claude Code reads it first, so hhx writes there.
+hhx always writes Claude's user settings (`~/.claude/settings.json`), even when `~/.claude/settings.local.json` exists.
 
 `hhx uninstall` removes only the entries hhx wrote.
 
