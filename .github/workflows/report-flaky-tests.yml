@@ -35,6 +35,10 @@ permissions:
 
 jobs:
   report:
+    # fork の PR の CI は PR 側の ci.yml で動き、artifact の中身を PR の作成者が自由に作れる。
+    # 起票や閉じた issue の開き直しに使われないよう、fork の run は対象外にする。
+    # fork で見つかった flaky は、メンテナが workflow_dispatch で明示的に拾う。
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
