@@ -19,7 +19,8 @@ HHX_COMPAT_TARGET=python HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレク�
 | `HHX_BIN` | 対象の hhx。既定は `bin/hhx` |
 | `HHX_COMPAT_PYTHON_HOOKS` | `python` のときに起動する Python 本体のディレクトリ |
 
-対象が `hhx` のとき、`helpers.py` は `HHX_CONFIG` を存在しないパスへ固定し、手元の `~/.config/hhx/config.yaml` を読ませない。
+対象が `hhx` のとき、`helpers.py` は `HHX_CONFIG` を一時的な設定ファイルへ固定し、手元の `~/.config/hhx/config.yaml` を読ませない。
+その設定ファイルは、既定で無効な hook（`helpers.DEFAULT_OFF_HOOKS`）だけを有効にする。
 
 ## 切り替えの仕組み
 
@@ -33,7 +34,8 @@ HHX_COMPAT_TARGET=python HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレク�
 
 ## hook を移植したとき
 
-1. `helpers.PORTED_HOOKS` に hook 名を足す。
+1. `helpers.PORTED_HOOKS` に hook 名を足す。hhx で既定では無効な hook は `helpers.DEFAULT_OFF_HOOKS` にも足す
+   （互換スイートが使う一時的な設定ファイルで有効にする。Python 実装は常に有効なため）。
 2. `make compat-test` で、その hook の L1 と L3 が hhx に向けて全件通ることを確かめる。
 3. 仕様を意図して変えたテスト（ref 名や保護対象の置き換えなど）は、ここで書き換える。
 
