@@ -28,6 +28,9 @@ const WORKFLOW_CONTRACT = Object.freeze({ name: 'CI', path: '.github/workflows/c
 const CI_UPLOAD_STEP = 'Upload CI test report';
 // 1つのrunで開く issue の上限。超えた分は step summary にだけ残す。
 const MAX_ISSUES_PER_RUN = 20;
+// issue の一覧 API は作成直後の issue を数秒遅れて返す。起票の前後でこれだけ待って照会し直し、
+// 別の run が直前に作った同名の issue と重ならないようにする。
+const SETTLE_MS = 3000;
 
 // workflow run の path は `.github/workflows/ci.yml@main` のように ref を付けて返ることがある。
 function workflowPath(value) {
@@ -218,21 +221,18 @@ async function listComments(github, owner, repo, issueNumber) {
   return pages((page) => github.rest.issues.listComments({ owner, repo, issue_number: issueNumber, per_page: 100, page }));
 }
 
-// issues を渡すと全ページ取得を1回に巻き上げられる。作成した issue は同じ配列へ積み、
-// 同じrunの後続グループから見えるようにする。
-async function upsertGroup({ github, owner, repo, group, source, issues }) {
-  const known = issues || await listIssues(github, owner, repo);
-  const matching = known.filter((item) => item.title === group.title).sort((a, b) => a.number - b.number);
-  const issue = matching[0];
-  // concurrencyのqueueが効かず複数のrunが同時に走ると、同じタイトルのissueが並び得る。
-  // 先頭だけを使い、重複は警告として残す。
-  if (matching.length > 1 && source.summary) source.summary(`duplicate issue titles for ${group.title}: ${matching.slice(1).map((item) => item.number).join(', ')}`);
-  if (!issue) {
-    const body = buildIssueBody(group, source);
-    const created = await github.rest.issues.create({ owner, repo, title: group.title, body });
-    if (issues) issues.push({ number: created?.data?.number ?? Number.MAX_SAFE_INTEGER, title: group.title, body, state: 'open' });
-    return 'created';
-  }
+// 作成日の新しい順に1ページだけ読み、同名の issue を番号順に返す。
+// 直前に作られた issue を探すための照会なので、古い issue は listIssues に任せる。
+async function recentIssuesWithTitle(github, owner, repo, title) {
+  const result = await github.rest.issues.listForRepo({ owner, repo, state: 'all', sort: 'created', direction: 'desc', per_page: 100, page: 1 });
+  return (result.data || []).filter((item) => !item.pull_request && item.title === title).sort((a, b) => a.number - b.number);
+}
+
+function wait(ms) {
+  return ms > 0 ? new Promise((resolve) => { setTimeout(resolve, ms); }) : Promise.resolve();
+}
+
+async function recordOnIssue({ github, owner, repo, group, source, issue }) {
   const comments = await listComments(github, owner, repo, issue.number);
   const found = [issue.body || '', ...comments.map((item) => item.body || '')].some((body) => body.includes(group.marker));
   if (found) return 'already-recorded';
@@ -240,6 +240,38 @@ async function upsertGroup({ github, owner, repo, group, source, issues }) {
   if (wasClosed) await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'open' });
   await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: buildIssueComment(group, source) });
   return wasClosed ? 'reopened-commented' : 'commented';
+}
+
+// issues を渡すと全ページ取得を1回に巻き上げられる。作成した issue は同じ配列へ積み、
+// 同じrunの後続グループから見えるようにする。
+async function upsertGroup({ github, owner, repo, group, source, issues, settleMs = SETTLE_MS }) {
+  const known = issues || await listIssues(github, owner, repo);
+  const matching = known.filter((item) => item.title === group.title).sort((a, b) => a.number - b.number);
+  // concurrencyのqueueが効かず複数のrunが同時に走ると、同じタイトルのissueが並び得る。
+  // 先頭だけを使い、重複は警告として残す。
+  if (matching.length > 1 && source.summary) source.summary(`duplicate issue titles for ${group.title}: ${matching.slice(1).map((item) => item.number).join(', ')}`);
+  let issue = matching[0];
+  if (!issue) {
+    // 一覧の反映が遅れて、直前の run が作った issue が見えていないことがある。
+    await wait(settleMs);
+    issue = (await recentIssuesWithTitle(github, owner, repo, group.title))[0];
+  }
+  if (issue) return recordOnIssue({ github, owner, repo, group, source, issue });
+  const body = buildIssueBody(group, source);
+  const created = (await github.rest.issues.create({ owner, repo, title: group.title, body }))?.data;
+  const createdNumber = created?.number ?? Number.MAX_SAFE_INTEGER;
+  // 同時に走った run も同じ issue を作り得る。番号の最も小さい issue を正本にし、それ以外は閉じる。
+  await wait(settleMs);
+  const canonical = (await recentIssuesWithTitle(github, owner, repo, group.title))[0];
+  if (canonical && created?.number && canonical.number < created.number) {
+    await github.rest.issues.createComment({ owner, repo, issue_number: created.number, body: `Duplicate of #${canonical.number}.` });
+    await github.rest.issues.update({ owner, repo, issue_number: created.number, state: 'closed', state_reason: 'not_planned' });
+    if (source.summary) source.summary(`closed duplicate issue #${created.number} for ${group.title}; kept #${canonical.number}`);
+    if (issues) issues.push(canonical);
+    return recordOnIssue({ github, owner, repo, group, source, issue: canonical });
+  }
+  if (issues) issues.push({ number: createdNumber, title: group.title, body, state: 'open' });
+  return 'created';
 }
 
 function zipEntries(zipPath) {
@@ -373,7 +405,7 @@ async function run(options) {
       skipped.push(group.title);
       continue;
     }
-    results.push({ title: group.title, action: await upsertGroup({ github, owner, repo, group, source, issues }) });
+    results.push({ title: group.title, action: await upsertGroup({ github, owner, repo, group, source, issues, settleMs: options.settleMs }) });
   }
   const summary = `flaky reports: ${results.length} issue(s); ${results.filter((item) => item.action === 'created').length} created, ${results.filter((item) => item.action === 'commented' || item.action === 'reopened-commented').length} commented`;
   if (options.core?.summary) {

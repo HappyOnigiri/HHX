@@ -81,7 +81,8 @@ function ciJob(overrides = {}) {
 }
 
 // fakeGitHub は reporter が呼ぶ Actions と issue の API を、メモリ上の状態で置き換える。
-function fakeGitHub({ run = sourceRun, jobs = [ciJob()], artifacts, issues = [], comments = new Map(), calls = [] } = {}) {
+// views を渡すと、issue の一覧 API はその中身を先頭から1回ずつ返す。反映の遅れた一覧を再現するのに使う。
+function fakeGitHub({ run = sourceRun, jobs = [ciJob()], artifacts, issues = [], comments = new Map(), calls = [], views = [] } = {}) {
   let currentRun = '10';
   return { rest: {
     actions: {
@@ -92,7 +93,7 @@ function fakeGitHub({ run = sourceRun, jobs = [ciJob()], artifacts, issues = [],
       ] } }),
     },
     issues: {
-      listForRepo: async () => ({ data: issues }),
+      listForRepo: async () => ({ data: views.length > 0 ? views.shift() : [...issues] }),
       listComments: async ({ issue_number: number }) => ({ data: comments.get(number) || [] }),
       create: async (request) => {
         const issue = { number: issues.length + 1, title: request.title, body: request.body, state: 'open' };
@@ -107,14 +108,19 @@ function fakeGitHub({ run = sourceRun, jobs = [ciJob()], artifacts, issues = [],
         calls.push(['comment', number]);
         return { data: {} };
       },
-      update: async ({ state }) => { calls.push(['update', state]); return { data: {} }; },
+      update: async ({ issue_number: number, state }) => {
+        calls.push(['update', state]);
+        const issue = issues.find((item) => item.number === number);
+        if (issue) issue.state = state;
+        return { data: {} };
+      },
     },
   } };
 }
 
 function runOptions(github, runId = '10', extra = {}) {
   return {
-    github, owner: OWNER, repo: REPO, sourceRunId: runId, sourceAttempt: '1',
+    github, owner: OWNER, repo: REPO, sourceRunId: runId, sourceAttempt: '1', settleMs: 0,
     reports: [{ artifactName: `ci-tests-${PROFILE}-${runId}-1`, manifest: manifest(runId, '1') }],
     ...extra,
   };
@@ -131,10 +137,10 @@ test('creates once and comments on a later occurrence of the same issue', async 
   const calls = [];
   const github = fakeGitHub({ calls });
   const group1 = reporter.aggregateManifests([{ artifactName: 'report', manifest: manifest('10', '1') }], source)[0];
-  assert.equal(await reporter.upsertGroup({ github, owner: OWNER, repo: REPO, group: group1, source }), 'created');
+  assert.equal(await reporter.upsertGroup({ github, owner: OWNER, repo: REPO, group: group1, source, settleMs: 0 }), 'created');
   const source2 = { ...source, runId: '11', runUrl: `${RUN_URL}/11` };
   const group2 = reporter.aggregateManifests([{ artifactName: 'report', manifest: manifest('11', '1') }], source2)[0];
-  assert.equal(await reporter.upsertGroup({ github, owner: OWNER, repo: REPO, group: group2, source: source2 }), 'commented');
+  assert.equal(await reporter.upsertGroup({ github, owner: OWNER, repo: REPO, group: group2, source: source2, settleMs: 0 }), 'commented');
   assert.deepEqual(calls, [['create', 1], ['comment', 1]]);
 });
 
@@ -143,8 +149,30 @@ test('reopens a closed issue before commenting', async () => {
   const issues = [{ number: 3, title: '[flaky] internal/example/flaky_test.go: TestFlaky', body: '', state: 'closed' }];
   const github = fakeGitHub({ issues, calls });
   const group = reporter.aggregateManifests([{ artifactName: 'report', manifest: manifest('10', '1') }], source)[0];
-  assert.equal(await reporter.upsertGroup({ github, owner: OWNER, repo: REPO, group, source }), 'reopened-commented');
+  assert.equal(await reporter.upsertGroup({ github, owner: OWNER, repo: REPO, group, source, settleMs: 0 }), 'reopened-commented');
   assert.deepEqual(calls, [['update', 'open'], ['comment', 3]]);
+});
+
+test('uses an issue that the first listing missed instead of creating another', async () => {
+  const calls = [];
+  const group = reporter.aggregateManifests([{ artifactName: 'report', manifest: manifest('10', '1') }], source)[0];
+  const issues = [{ number: 1, title: group.title, body: reporter.buildIssueBody(group, source), state: 'open' }];
+  const github = fakeGitHub({ issues, calls, views: [[]] });
+  assert.equal(await reporter.upsertGroup({ github, owner: OWNER, repo: REPO, group, source, settleMs: 0 }), 'already-recorded');
+  assert.deepEqual(calls, []);
+});
+
+test('closes its own issue when another run created the same one first', async () => {
+  const calls = [];
+  const warnings = [];
+  const group = reporter.aggregateManifests([{ artifactName: 'report', manifest: manifest('10', '1') }], source)[0];
+  const issues = [{ number: 1, title: group.title, body: reporter.buildIssueBody(group, source), state: 'open' }];
+  const github = fakeGitHub({ issues, calls, views: [[], []] });
+  const summarySource = { ...source, summary: (message) => warnings.push(message) };
+  assert.equal(await reporter.upsertGroup({ github, owner: OWNER, repo: REPO, group, source: summarySource, settleMs: 0 }), 'already-recorded');
+  assert.deepEqual(calls, [['create', 2], ['comment', 2], ['update', 'closed']]);
+  assert.equal(issues[1].state, 'closed');
+  assert.deepEqual(warnings, [`closed duplicate issue #2 for ${group.title}; kept #1`]);
 });
 
 test('runs the report workflow with mocked Actions and issue APIs', async () => {
