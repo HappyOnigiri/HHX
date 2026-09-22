@@ -197,6 +197,11 @@ test('rejects a workflow that is not in the contract table', async () => {
   await assert.rejects(reporter.run(runOptions(github)), /not a supported workflow/);
 });
 
+test('accepts a workflow path that carries a ref', async () => {
+  const github = fakeGitHub({ run: (id) => sourceRun(id, { path: '.github/workflows/ci.yml@main' }) });
+  assert.deepEqual((await reporter.run(runOptions(github))).results.map((item) => item.action), ['created']);
+});
+
 test('rejects a source run that has not completed', async () => {
   const github = fakeGitHub({ run: (id) => sourceRun(id, { status: 'in_progress' }) });
   await assert.rejects(reporter.run(runOptions(github)), /has not completed/);

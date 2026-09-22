@@ -29,6 +29,11 @@ const CI_UPLOAD_STEP = 'Upload CI test report';
 // 1つのrunで開く issue の上限。超えた分は step summary にだけ残す。
 const MAX_ISSUES_PER_RUN = 20;
 
+// workflow run の path は `.github/workflows/ci.yml@main` のように ref を付けて返ることがある。
+function workflowPath(value) {
+  return String(value).split('@')[0];
+}
+
 function profileFromArtifactName(name) {
   return ARTIFACT_PROFILE.exec(name || '')?.[1] || '';
 }
@@ -331,7 +336,7 @@ async function run(options) {
   if (!github || !owner || !repo || !/^\d+$/.test(runId) || !/^\d+$/.test(attempt)) throw new Error('source run and repository are required');
   const sourceRun = (await github.rest.actions.getWorkflowRun({ owner, repo, run_id: Number(runId) })).data;
   // workflow_runの workflows: と同じく、workflowの表示名に依存する。pathも合わせて確認する。
-  if (sourceRun.name !== WORKFLOW_CONTRACT.name || (sourceRun.path && sourceRun.path !== WORKFLOW_CONTRACT.path)) {
+  if (sourceRun.name !== WORKFLOW_CONTRACT.name || (sourceRun.path && workflowPath(sourceRun.path) !== WORKFLOW_CONTRACT.path)) {
     throw new Error('source run is not a supported workflow');
   }
   if (sourceRun.status && sourceRun.status !== 'completed') throw new Error('source run has not completed');
