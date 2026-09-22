@@ -5,7 +5,7 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 
 ## 不変条件
 
-- `hhx hook` はどの経路でも終了コード 0 で終わる。未知の名前・壊れた設定・本体のエラーや panic は無出力にする（fail-open）。
+- `hhx hook <name>` はどの経路でも終了コード 0 で終わる（名前を省いた手入力は usage を出して 2）。未知の名前・壊れた設定・本体のエラーや panic は無出力にする（fail-open）。
 - PreToolUse を通すときは何も出力しない。`allow` と `ask` は返さない（`ask` は Codex が解釈しない）。
 - `hhx install` / `uninstall` は hhx のエントリ（先頭トークンの basename が `hhx`、2 番目が `hook`）だけを扱う。
   wx や利用者の hook は、同じグループにも入れないし消しもしない。
