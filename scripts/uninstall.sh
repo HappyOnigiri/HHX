@@ -82,7 +82,8 @@ main() {
     local answer=''
     echo ''
     printf 'Continue? [y/N] '
-    [ -r /dev/tty ] || fail 'no terminal to confirm on; rerun with --yes to skip the question'
+    # /dev/tty は誰でも読める権限を持つので、-r では制御端末の有無を判定できない。実際に開いて確かめる。
+    { : < /dev/tty; } 2> /dev/null || fail 'no terminal to confirm on; rerun with --yes to skip the question'
     read -r answer < /dev/tty || answer=''
     case "$answer" in
       y | Y | yes | YES) ;;

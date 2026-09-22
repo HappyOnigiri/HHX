@@ -126,6 +126,7 @@ if ! { : < /dev/tty; } 2>/dev/null; then
   mkdir -p "$case_home/.claude"
   run_uninstaller --
   check no-terminal 'the uninstaller refuses without confirmation' failed
+  check no-terminal 'the refusal suggests --yes' contains "$case_output" 'rerun with --yes'
   check no-terminal 'nothing is removed' test -x "$case_home/.local/bin/hhx"
   check no-terminal 'nothing is run' not_called
 fi
