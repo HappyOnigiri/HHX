@@ -282,6 +282,36 @@ func TestInstallKeepsGroupPositions(t *testing.T) {
 	}
 }
 
+// TestInstallKeepsForeignGroupPositionWhenSplitting は、利用者の hook と hhx のエントリが混在するグループを分けるとき、
+// 利用者のグループの位置を動かさないことを確かめる。
+func TestInstallKeepsForeignGroupPositionWhenSplitting(t *testing.T) {
+	options := testOptions(t)
+	path, _ := TargetPath(options.Home, hookrt.Codex)
+	writeFile(t, path, `{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "mine.sh"}, {"type": "command", "command": "/old/hhx hook alpha-guard"}]},
+      {"hooks": [{"type": "command", "command": "wx hook pre-tool-use"}]}
+    ]
+  }
+}
+`)
+	mustInstall(t, options, hookrt.Codex, testDefinitions())
+	pre := parseHooks(t, readFile(t, path))["PreToolUse"]
+	if len(pre) != 3 {
+		t.Fatalf("want 3 groups, got %d", len(pre))
+	}
+	if got := commands(pre[0]); len(got) != 1 || got[0] != "mine.sh" {
+		t.Fatalf("the foreign group must stay at index 0, got %v", got)
+	}
+	if got := commands(pre[1]); len(got) != 1 || got[0] != "wx hook pre-tool-use" {
+		t.Fatalf("the wx group must stay at index 1, got %v", got)
+	}
+	if got := commands(pre[2]); len(got) != 1 || got[0] != testBinary+" hook alpha-guard" {
+		t.Fatalf("the new hhx group must go to the end, got %v", got)
+	}
+}
+
 func TestHookCommandQuotesPaths(t *testing.T) {
 	tests := []struct {
 		binary string

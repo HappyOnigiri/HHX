@@ -160,14 +160,16 @@ func placeGroups(list *jsonNode, groups []managedGroup) bool {
 			continue
 		}
 		removed = true
+		if len(remaining) > 0 {
+			// 利用者の hook が残るグループの位置は挿入先にしない。手前に差し込むと、そのグループの番号が動き再承認が要る。
+			entries.items = remaining
+			kept = append(kept, group)
+			continue
+		}
 		if key := groupMatcherKey(group); key != "" {
 			if _, seen := slots[key]; !seen {
 				slots[key] = len(kept)
 			}
-		}
-		if len(remaining) > 0 {
-			entries.items = remaining
-			kept = append(kept, group)
 		}
 	}
 	placed := make([][]*jsonNode, len(kept)+1)
