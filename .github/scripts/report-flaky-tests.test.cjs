@@ -208,7 +208,9 @@ test('does not expect an artifact from a job that stopped before uploading', asy
   assert.equal(result.results.length, 0);
 });
 
-test('rejects a manifest that names another profile than its artifact', () => {
+// profile が1つしか無いうちは、PROFILES に含まれ、かつ artifact 名の profile と食い違う manifest を作れない。
+// artifact 名との食い違いを見る分岐は、2つ目の profile が入るまで到達できない。
+test('rejects a manifest with an unsupported profile', () => {
   assert.throws(() => reporter.aggregateManifests([
     { artifactName: `ci-tests-${PROFILE}-10-1`, manifest: manifest('10', '1', 'coverage') },
   ], source), /unsupported profile/);
