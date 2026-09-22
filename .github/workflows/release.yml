@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.3.0)。空なら bump で自動判定する。最初のリリースでは必ず指定する"
+        required: false
+        type: string
+      bump:
+        description: "バージョンの上げ方。version を指定した場合は無視される"
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - major
+          - minor
+          - patch
+
+# バージョンは実行後に確定するため、リリース同士は常に直列化する。
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # バージョンの真実源はタグである。リポジトリにバージョンを書いた manifest を持たないため
+      # version-bump-type は none とし、リリース PR はバージョンを刻む差分を持たない空コミットになる。
+      - uses: HappyOnigiri/ReleaseActions/actions/prepare-release@main
+        with:
+          version: ${{ inputs.version }}
+          # 共通 Action は version と bump の同時指定を拒むため、version を入れた実行では bump を none へ落とす。
+          bump: ${{ inputs.version != '' && 'none' || inputs.bump }}
+          version-bump-type: none
+          github-token: ${{ secrets.GH_TOKEN }}
