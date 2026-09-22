@@ -26,7 +26,7 @@ const MAX_TEXT = 12000;
 const WORKFLOW_CONTRACT = Object.freeze({ name: 'CI', path: '.github/workflows/ci.yml' });
 
 const CI_UPLOAD_STEP = 'Upload CI test report';
-// 1つのrunで開く issue の上限。超えた分は step summary にだけ残す。
+// 1つのrunで新しく開く issue の上限。既存の issue へのコメントは数えない。超えた分は step summary にだけ残す。
 const MAX_ISSUES_PER_RUN = 20;
 // issue の一覧 API は作成直後の issue を数秒遅れて返す。起票の前後でこれだけ待って照会し直し、
 // 別の run が直前に作った同名の issue と重ならないようにする。
@@ -244,7 +244,8 @@ async function recordOnIssue({ github, owner, repo, group, source, issue }) {
 
 // issues を渡すと全ページ取得を1回に巻き上げられる。作成した issue は同じ配列へ積み、
 // 同じrunの後続グループから見えるようにする。
-async function upsertGroup({ github, owner, repo, group, source, issues, settleMs = SETTLE_MS }) {
+// canCreate が false のときは新しい issue を作らず 'over-limit' を返す。
+async function upsertGroup({ github, owner, repo, group, source, issues, settleMs = SETTLE_MS, canCreate = true }) {
   const known = issues || await listIssues(github, owner, repo);
   const matching = known.filter((item) => item.title === group.title).sort((a, b) => a.number - b.number);
   // concurrencyのqueueが効かず複数のrunが同時に走ると、同じタイトルのissueが並び得る。
@@ -257,6 +258,7 @@ async function upsertGroup({ github, owner, repo, group, source, issues, settleM
     issue = (await recentIssuesWithTitle(github, owner, repo, group.title))[0];
   }
   if (issue) return recordOnIssue({ github, owner, repo, group, source, issue });
+  if (!canCreate) return 'over-limit';
   const body = buildIssueBody(group, source);
   const created = (await github.rest.issues.create({ owner, repo, title: group.title, body }))?.data;
   const createdNumber = created?.number ?? Number.MAX_SAFE_INTEGER;
@@ -401,11 +403,13 @@ async function run(options) {
       notFiled.push(group.title);
       continue;
     }
-    if (results.length >= MAX_ISSUES_PER_RUN) {
+    const canCreate = results.filter((item) => item.action === 'created').length < MAX_ISSUES_PER_RUN;
+    const action = await upsertGroup({ github, owner, repo, group, source, issues, settleMs: options.settleMs, canCreate });
+    if (action === 'over-limit') {
       skipped.push(group.title);
       continue;
     }
-    results.push({ title: group.title, action: await upsertGroup({ github, owner, repo, group, source, issues, settleMs: options.settleMs }) });
+    results.push({ title: group.title, action });
   }
   const summary = `flaky reports: ${results.length} issue(s); ${results.filter((item) => item.action === 'created').length} created, ${results.filter((item) => item.action === 'commented' || item.action === 'reopened-commented').length} commented`;
   if (options.core?.summary) {

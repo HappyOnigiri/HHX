@@ -249,6 +249,24 @@ test('caps how many issues one run opens', async () => {
   assert.equal(result.skipped.length, 5);
 });
 
+test('does not count comments on existing issues toward the limit', async () => {
+  const value = manifest('10', '1');
+  value.recoveries = [];
+  const issues = [];
+  for (let index = 0; index < 21; index += 1) {
+    const item = recovery(`internal/example/flaky${String(index).padStart(2, '0')}_test.go`);
+    value.recoveries.push(item);
+    if (index < 20) issues.push({ number: index + 1, title: reporter.issueTitle(item.declaration), body: '', state: 'open' });
+  }
+  const github = fakeGitHub({ issues });
+  const result = await reporter.run(runOptions(github, '10', {
+    reports: [{ artifactName: `ci-tests-${PROFILE}-10-1`, manifest: value }],
+  }));
+  assert.equal(result.results.filter((item) => item.action === 'commented').length, 20);
+  assert.equal(result.results.filter((item) => item.action === 'created').length, 1);
+  assert.equal(result.skipped.length, 0);
+});
+
 test('rejects a path escape in an artifact manifest', () => {
   const value = manifest('10', '1');
   value.recoveries[0].declaration.path = '../outside.go';
