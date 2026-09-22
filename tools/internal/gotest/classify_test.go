@@ -115,3 +115,17 @@ func TestFindShuffleReadsBothSpellings(t *testing.T) {
 		t.Fatalf("seed=%q", got)
 	}
 }
+
+func TestRaceDetectedFindsPackagesWithARaceReport(t *testing.T) {
+	result := parse(t, `{"Action":"start","Package":"b"}
+{"Action":"output","Package":"b","Test":"TestB","Output":"WARNING: DATA RACE\n"}
+{"Action":"start","Package":"a"}
+{"Action":"output","Package":"a","Test":"TestA","Output":"    testing.go:1617: race detected during execution of test\n"}
+{"Action":"start","Package":"c"}
+{"Action":"output","Package":"c","Test":"TestC","Output":"    c_test.go:3: plain failure\n"}
+`)
+	got := RaceDetected(result)
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("RaceDetected=%v", got)
+	}
+}

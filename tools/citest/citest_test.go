@@ -39,6 +39,12 @@ func writeTree(t *testing.T, files map[string]string) string {
 
 func runFixture(t *testing.T, root string) (int, manifest) {
 	t.Helper()
+	return runFixtureWith(t, root)
+}
+
+// runFixtureWith は go test のフラグを足して runFixture と同じ実行をする。
+func runFixtureWith(t *testing.T, root string, flags ...string) (int, manifest) {
+	t.Helper()
 	report := filepath.Join(root, "artifacts")
 	coverage := filepath.Join(root, "coverage.out")
 	var output strings.Builder
@@ -48,7 +54,7 @@ func runFixture(t *testing.T, root string) (int, manifest) {
 		CoverageProfile: coverage,
 		RepoRoot:        root,
 		GoCommand:       "go",
-		Command:         []string{"go", "test", "-count=1", "-shuffle=off", "-covermode=atomic", "-coverpkg=./...", "-coverprofile=" + coverage, "./..."},
+		Command:         append(append([]string{"go", "test"}, flags...), "-count=1", "-shuffle=off", "-covermode=atomic", "-coverpkg=./...", "-coverprofile="+coverage, "./..."),
 	}, &output)
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +100,39 @@ func TestFlaky(t *testing.T) {
 	}
 	if len(value.Retries[0].FailedTests) != 1 || value.Retries[0].FailedTests[0] != "TestFlaky" {
 		t.Fatalf("retry failed tests=%v", value.Retries[0].FailedTests)
+	}
+}
+
+// race detector は誤検知を出さないので、初回だけ競合するテストも再実行せず失敗のまま残す。
+func TestDataRaceIsNotRetried(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "first-run")
+	root := writeFixture(t, `package example
+
+import (
+	"os"
+	"testing"
+)
+
+func TestRacy(t *testing.T) {
+	path := os.Getenv("FLAKY_MARKER")
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	if err := os.WriteFile(path, []byte("seen"), 0o600); err != nil { t.Fatal(err) }
+	value := 0
+	done := make(chan struct{})
+	go func() { value++; close(done) }()
+	value++
+	<-done
+}
+`)
+	t.Setenv("FLAKY_MARKER", marker)
+	code, value := runFixtureWith(t, root, "-race")
+	if code == 0 || value.Status != "failed" || len(value.Recoveries) != 0 || len(value.Retries) != 0 {
+		t.Fatalf("code=%d status=%s recoveries=%d retries=%d", code, value.Status, len(value.Recoveries), len(value.Retries))
+	}
+	if !strings.Contains(strings.Join(value.Diagnostics, "\n"), "data race detected") {
+		t.Fatalf("diagnostics=%v", value.Diagnostics)
 	}
 }
 

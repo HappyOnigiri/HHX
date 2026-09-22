@@ -112,6 +112,32 @@ func FailedTests(result Result) map[string][]string {
 	return failed
 }
 
+// racePatterns は race detector が test2json の Output に残す表記。
+var racePatterns = []string{"WARNING: DATA RACE", "race detected during execution of test"}
+
+// RaceDetected は race detector がデータ競合を報告したパッケージを、名前順に返す。
+// race detector は誤検知を出さないので、再実行で再現しなくても検出の時点で実在の不具合として扱える。
+func RaceDetected(result Result) []string {
+	found := make(map[string]bool)
+	for _, event := range result.Events {
+		if event.Package == "" || found[event.Package] {
+			continue
+		}
+		for _, pattern := range racePatterns {
+			if strings.Contains(event.Output, pattern) {
+				found[event.Package] = true
+				break
+			}
+		}
+	}
+	packages := make([]string, 0, len(found))
+	for packageName := range found {
+		packages = append(packages, packageName)
+	}
+	sort.Strings(packages)
+	return packages
+}
+
 // ExitDetails はプロセスの終了状態を、終了コードとシグナル名へ分ける。
 // シグナルで死んだ場合は -1 を返し、通常の失敗と区別できるようにする。
 func ExitDetails(err error) (int, string) {

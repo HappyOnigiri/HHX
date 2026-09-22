@@ -105,6 +105,15 @@ func run(ctx context.Context, cfg config, output io.Writer) (int, error) {
 	default:
 		declarations, diagnostics := resolveFailedDeclarations(ctx, cfg, failed)
 		man.Diagnostics = append(man.Diagnostics, diagnostics...)
+		// データ競合を検出したパッケージは、再実行で通っても回復扱いにしない。
+		// 宣言を外しておくと retryFailures が再実行せず、そのテストは失敗のまま残る。
+		for _, packageName := range gotest.RaceDetected(initialResult) {
+			if _, ok := failed[packageName]; !ok {
+				continue
+			}
+			delete(declarations, packageName)
+			man.Diagnostics = append(man.Diagnostics, packageName+": data race detected; not retried")
+		}
 		// 宣言を解決できなかったパッケージはretryFailuresが対象から外し、そのテストは
 		// 回復扱いにならないためstatusはfailedのままになる。他のパッケージの再実行は妨げない。
 		man.Status = retryFailures(ctx, cfg, initialResult, failed, declarations, &man, output)
