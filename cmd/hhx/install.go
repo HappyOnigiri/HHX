@@ -60,7 +60,8 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 func parseAgentFlags(command string, args []string, stderr io.Writer) ([]hookrt.Agent, bool) {
 	flags := pflag.NewFlagSet(command, pflag.ContinueOnError)
 	flags.SetOutput(stderr)
-	names := flags.StringSlice("agent", nil, "agent to configure: claude or codex (repeatable; default: every agent whose config directory exists)")
+	names := flags.StringSlice("agent", nil,
+		"agent to configure: claude or codex (repeatable; default: every agent whose config directory exists)")
 	if err := flags.Parse(args); err != nil {
 		return nil, false
 	}
@@ -91,11 +92,18 @@ func parseAgent(name string) (hookrt.Agent, bool) {
 
 // applyAgents は agents（省略時は設定ディレクトリのある CLI）へ apply を順に適用する。
 // 1 つが失敗しても残りは処理し、終了コードで失敗を伝える。
-func applyAgents(command string, agents []hookrt.Agent, options install.Options, stdout, stderr io.Writer, apply func(hookrt.Agent) (install.Result, error)) int {
+func applyAgents(
+	command string,
+	agents []hookrt.Agent,
+	options install.Options,
+	stdout, stderr io.Writer,
+	apply func(hookrt.Agent) (install.Result, error),
+) int {
 	if len(agents) == 0 {
 		agents = detectAgents(options.Home)
 		if len(agents) == 0 {
-			_, _ = fmt.Fprintf(stderr, "hhx %s: neither ~/.claude nor ~/.codex exists; pass --agent to choose explicitly\n", command)
+			_, _ = fmt.Fprintf(stderr,
+				"hhx %s: neither ~/.claude nor ~/.codex exists; pass --agent to choose explicitly\n", command)
 			return 1
 		}
 	}
@@ -165,7 +173,7 @@ func validateConfig(definitions []hookrt.Definition) error {
 			continue
 		}
 		if err := cfg.Decode(definition.Name, definition.NewSettings()); err != nil {
-			return fmt.Errorf("%s: hooks.%s: %v", path, definition.Name, err)
+			return fmt.Errorf("%s: hooks.%s: %w", path, definition.Name, err)
 		}
 	}
 	return nil

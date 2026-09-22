@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,11 +55,11 @@ func TestAddContextAndPrint(t *testing.T) {
 	if got := invoke(add, "{}"); got != `{"hookSpecificOutput":{"additionalContext":"note","hookEventName":"PostToolUse"}}`+"\n" {
 		t.Fatalf("AddContext wrote %q", got)
 	}
-	print := &Definition{Name: "p", DefaultEnabled: true, Run: func(c *Context) error {
+	printer := &Definition{Name: "p", DefaultEnabled: true, Run: func(c *Context) error {
 		c.Print("plain text")
 		return nil
 	}}
-	if got := invoke(print, "{}"); got != "plain text" {
+	if got := invoke(printer, "{}"); got != "plain text" {
 		t.Fatalf("Print wrote %q", got)
 	}
 }
@@ -155,5 +157,24 @@ func TestArgumentReplacesStdin(t *testing.T) {
 	invoke(definition, "from stdin")
 	if input != "from stdin" || fromArgs {
 		t.Fatalf("input=%q fromArgs=%v", input, fromArgs)
+	}
+}
+
+func TestSettingsReadsTheHookMapping(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("hooks:\n  s:\n    message: hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Message string `yaml:"message"`
+	}
+	definition := &Definition{Name: "s", DefaultEnabled: true, Run: func(c *Context) error {
+		return c.Settings(&settings)
+	}}
+	Run(definition, Invocation{Stdin: strings.NewReader("{}"), LoadConfig: func() (*config.Config, error) {
+		return config.Load(path)
+	}})
+	if settings.Message != "hello" {
+		t.Fatalf("settings=%+v", settings)
 	}
 }
