@@ -246,18 +246,18 @@ func TestRetryCommandKeepsSeparateFlagValuesOutOfPackageList(t *testing.T) {
 	command, _, err := retryCommand(config{
 		Profile:  "race-coverage",
 		RepoRoot: t.TempDir(),
-		Command:  []string{"go", "test", "-timeout", "10s", "-shuffle", "on", "./..."},
+		Command:  []string{"go", "test", "-timeout", "10s", "-tags", "integration", "-shuffle", "on", "./..."},
 	}, "example.test/pkg", []string{"TestA"}, "123", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(command, " ")
-	for _, want := range []string{"-timeout 10s", "-shuffle=123", "example.test/pkg", "-run=^(TestA)$"} {
+	for _, want := range []string{"-timeout 10s", "-tags integration", "-shuffle=123", "example.test/pkg", "-run=^(TestA)$"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("retry command %q does not contain %q", joined, want)
 		}
 	}
-	if strings.Contains(joined, "-timeout example.test/pkg") {
+	if strings.Contains(joined, "-timeout example.test/pkg") || strings.Contains(joined, "-tags example.test/pkg") {
 		t.Fatalf("package was consumed as timeout value: %q", joined)
 	}
 }

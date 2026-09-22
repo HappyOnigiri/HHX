@@ -228,6 +228,11 @@ func replacePackages(command []string, packageName string) []string {
 		"-memprofilerate": true, "-mutexprofile": true, "-mutexprofilefraction": true,
 		"-outputdir": true, "-parallel": true, "-run": true, "-shuffle": true,
 		"-test.run": true, "-timeout": true, "-trace": true, "-vet": true,
+		// go help build の値付きフラグと、上に無い go help testflag の値付きフラグ。
+		"-tags": true, "-skip": true, "-ldflags": true, "-gcflags": true, "-asmflags": true,
+		"-exec": true, "-o": true, "-p": true, "-mod": true, "-modfile": true, "-overlay": true,
+		"-pgo": true, "-pkgdir": true, "-toolexec": true, "-fuzz": true, "-fuzztime": true,
+		"-fuzzminimizetime": true, "-list": true,
 	}
 	for index := 0; index < len(command); index++ {
 		arg := command[index]
