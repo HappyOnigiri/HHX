@@ -80,6 +80,8 @@ func TestInvalidConfigIsReported(t *testing.T) {
 		"hooks not mapping":     "hooks: [a]\n",
 		"hook not mapping":      "hooks:\n  x: yes\n",
 		"enabled not bool":      "hooks:\n  x:\n    enabled: maybe\n",
+		"enabled empty":         "hooks:\n  x:\n    enabled:\n",
+		"enabled null":          "hooks:\n  x:\n    enabled: ~\n",
 		"duplicate hook":        "hooks:\n  x: {}\n  x: {}\n",
 		"multiple documents":    "hooks: {}\n---\nhooks: {}\n",
 		"syntax error":          "hooks: [\n",

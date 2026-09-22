@@ -118,8 +118,13 @@ func parseHook(name string, node yaml.Node) (Hook, error) {
 		if node.Content[index].Value != "enabled" {
 			continue
 		}
+		// null を bool へ Decode すると false になり、値の書き忘れで hook が黙って止まる。true / false だけを受け付ける。
+		value := node.Content[index+1]
 		var enabled bool
-		if err := node.Content[index+1].Decode(&enabled); err != nil {
+		if value.Kind != yaml.ScalarNode || value.Tag != "!!bool" {
+			return Hook{}, fmt.Errorf("hooks.%s.enabled: must be true or false", name)
+		}
+		if err := value.Decode(&enabled); err != nil {
 			return Hook{}, fmt.Errorf("hooks.%s.enabled: must be true or false", name)
 		}
 		hook.Enabled = &enabled
