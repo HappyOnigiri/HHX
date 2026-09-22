@@ -50,7 +50,7 @@ markdown-lint:
 $(GOLANGCI_LINT):
 	@if [ ! -x "$@" ] || ! "$@" version 2>/dev/null | grep -Fq "$(GOLANGCI_LINT_VERSION)"; then \
 		mkdir -p "$(dir $@)"; \
-		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b bin v$(GOLANGCI_LINT_VERSION); \
+		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v$(GOLANGCI_LINT_VERSION)/install.sh | sh -s -- -b bin v$(GOLANGCI_LINT_VERSION); \
 	fi
 
 test:
