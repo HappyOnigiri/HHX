@@ -1,0 +1,62 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - durationcheck
+    - errchkjson
+    - errorlint
+    - exhaustive
+    - lll
+    - misspell
+    - nilerr
+    - noctx
+    - nolintlint
+    - nosprintfhostport
+    - predeclared
+    - thelper
+    - unconvert
+    - usestdlibvars
+    - wastedassign
+    - funlen
+    - inamedparam
+    - revive
+
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: false
+      check:
+        - switch
+        - map
+    lll:
+      line-length: 120
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+    funlen:
+      lines: 100
+      statements: 80
+      ignore-comments: true
+    revive:
+      enable-all-rules: false
+      rules:
+        - name: package-comments
+
+  exclusions:
+    rules:
+      # テストは JSON や設定の fixture を 1 行で持つことがあり、折り返すと検査の意味が変わる。
+      - path: _test\.go
+        linters: [funlen, lll]
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
