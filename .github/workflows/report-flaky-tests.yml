@@ -1,0 +1,61 @@
+name: Report flaky tests
+
+# CI のテストは citest 経由で走り、落ちたテストだけを 1 回再実行する。再実行で通ったテストは
+# CI を落とさず、artifact の報告にだけ残る。このワークフローはそれを読み、テストごとに issue を起票する。
+#
+# workflow_run で起動したワークフローは既定ブランチの定義で動く。PR の中でこのファイルや
+# reporter を変えても、その PR の CI の完了では古い定義が動く。
+#
+# workflows: の名前は ci.yml の name: と一致していなければ静かに発火しなくなる。
+# `make reporter-check` が両者を突き合わせる。
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Source CI run ID
+        required: true
+        type: string
+      run_attempt:
+        description: Source CI run attempt
+        required: true
+        type: string
+
+concurrency:
+  group: hhx-flaky-test-reports
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # artifact は fork の PR からも届くので、reporter は PR 側ではなく既定ブランチのものを使う。
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/github-script@v9
+        env:
+          SOURCE_RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
+          SOURCE_RUN_ATTEMPT: ${{ inputs.run_attempt || github.event.workflow_run.run_attempt }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const reporter = require('./.github/scripts/report-flaky-tests.cjs');
+            await reporter.run({
+              github,
+              context,
+              core,
+              sourceRunId: process.env.SOURCE_RUN_ID,
+              sourceAttempt: process.env.SOURCE_RUN_ATTEMPT,
+            });
