@@ -283,9 +283,27 @@ func parseTerms(text string) (terms []termPattern, invalid []int) {
 			terms = append(terms, pattern)
 			continue
 		}
-		terms = append(terms, regexp.MustCompile("(?i)"+regexp.QuoteMeta(line)))
+		terms = append(terms, regexp.MustCompile("(?i)"+literalPattern(line)))
 	}
 	return terms, invalid
+}
+
+// dottedI は、Python の re.IGNORECASE が互いに一致させ、Go の (?i) は i・I と İ・ı を区別する 4 文字である。
+// Python は 1 文字ずつの小文字化（İ→i）と、同じ大文字を持つ小文字の表（i と ı）で照合する。
+// ほかの文字の大文字小文字の対応は、Go の (?i) と一致する（Unicode のバージョンで増えた文字を除く）。
+const dottedI = "iIİı"
+
+// literalPattern は、語を Python の re.escape と re.IGNORECASE の組と同じ文字に一致する正規表現にする。
+func literalPattern(term string) string {
+	var pattern strings.Builder
+	for _, r := range term {
+		if strings.ContainsRune(dottedI, r) {
+			pattern.WriteString("[" + dottedI + "]")
+			continue
+		}
+		pattern.WriteString(regexp.QuoteMeta(string(r)))
+	}
+	return pattern.String()
 }
 
 // matchesAny は text が語のどれかを含むかを返す。

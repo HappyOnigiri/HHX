@@ -223,6 +223,11 @@ func TestParseTerms(t *testing.T) {
 		"Re:LITERAL":           true,
 		"# comment":            false,
 		"  " + term + "  more": true,
+		// Python の re.IGNORECASE は i・I・İ・ı を互いに一致させる。
+		"acme-İnternal": true,
+		"acme-ınternal": true,
+		"ACME-İNTERNAL": true,
+		"acme-nternal":  false,
 	} {
 		if got := matchesAny(text, terms); got != want {
 			t.Errorf("matchesAny(%q)=%v, want %v", text, got, want)
