@@ -510,7 +510,12 @@ var (
 // 絶対パスに加え、ホームディレクトリの下にあるものは ~/…・$HOME/…・${HOME}/… の表記でも一致させる。
 // 末尾だけで照合しないのは、/tmp/project/.config/hhx のような別の場所にある同名のパスまで止めないためである。
 func hhxCores() []string {
-	home := strings.TrimRight(os.Getenv("HOME"), "/")
+	// HOME が無くてもシェルは ~ をパスワードデータベースのホームへ展開するので、同じ順で探す。
+	// どちらからも得られないとき（"~"）は、ホームの下の保護対象を足さない。
+	// ホームが / のときは home を空にし、home+"/" が / になるようにする。
+	home := py.Home()
+	homeKnown := home != "~"
+	home = strings.TrimRight(home, "/")
 	var cores []string
 	seen := map[string]bool{}
 	appendCore := func(core string) {
@@ -524,7 +529,7 @@ func hhxCores() []string {
 			return
 		}
 		appendCore(`/+` + regexp.QuoteMeta(strings.TrimLeft(path, "/")) + tail)
-		if home != "" && strings.HasPrefix(path, home+"/") {
+		if homeKnown && strings.HasPrefix(path, home+"/") {
 			relative := regexp.QuoteMeta(path[len(home)+1:]) + tail
 			appendCore(`(?:~|\$HOME|\$\{HOME\})/` + relative)
 		}
@@ -535,7 +540,7 @@ func hhxCores() []string {
 			add(resolved, "")
 		}
 	}
-	if home != "" {
+	if homeKnown {
 		add(home+"/.config/hhx", pathTail)
 	}
 	return cores

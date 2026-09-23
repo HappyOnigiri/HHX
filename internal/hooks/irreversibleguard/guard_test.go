@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/HappyOnigiri/hhx/internal/hooktest"
+	py "github.com/HappyOnigiri/hhx/internal/pycompat"
 )
 
 // 理由文に出るラベル（どのルールが発火したかの判別用）。
@@ -504,6 +505,31 @@ func TestGuardFollowsTheExecutable(t *testing.T) {
 		{Command: "rm " + resolvedReal, Label: labelGuard},
 	})
 	check(t, "", hooktest.Commands("rm ~/.local/bin/hhx", "rm "+directory+"/bin/hhx2"))
+}
+
+// HOME が無くてもシェルは ~ をパスワードデータベースのホームへ展開するので、hhx の設定ディレクトリを守り続ける。
+func TestGuardWithoutHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	if err := os.Unsetenv("HOME"); err != nil {
+		t.Fatal(err)
+	}
+	home := py.Home()
+	if home == "~" {
+		t.Skip("パスワードデータベースからホームを得られない")
+	}
+	check(t, hooktest.Deny, []hooktest.Case{
+		{Command: "rm -rf ~/.config/hhx", Label: labelGuard + " (~/.config/hhx)"},
+		{Command: "rm -rf " + strings.TrimRight(home, "/") + "/.config/hhx", Label: labelGuard},
+	})
+}
+
+// HOME が空なら ~ は空に展開されるので、/.config/hhx を守る。
+func TestGuardWithEmptyHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	check(t, hooktest.Deny, []hooktest.Case{
+		{Command: "rm -rf ~/.config/hhx", Label: labelGuard + " (~/.config/hhx)"},
+		{Command: "rm -rf /.config/hhx", Label: labelGuard},
+	})
 }
 
 // --- 通過側 ---
