@@ -23,7 +23,7 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `internal/hookrt`: hook の定義と実行時の共通処理
 - `internal/registry`: hook の一覧。install と `hhx hook` の振り分けはここから作る
 - `internal/hooks/<name>`: hook 本体。1 hook 1 パッケージ（下の「hook の移植の型」）
-- `internal/pycompat`: Python の `\s`・`\d`・`\b`・`str.split()`・`splitlines()`・`json.dumps` の再現
+- `internal/pycompat`: Python の `\s`・`\d`・`\b`・`str.split()`・`splitlines()`・`str.lower()`・`json.dumps`・`os.path` の再現
 - `internal/hooktest`: hook のテストの補助（テストからだけ使う）
 - `internal/install`: Claude の settings.json と Codex の hooks.json の読み書き
 - `internal/config`: `~/.config/hhx/config.yaml` の読み込み
@@ -71,6 +71,10 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
   - Python の `$` は末尾の改行の直前にも一致する。入力に改行が残るパターンは `\n?$` にし、改行つきのケースをテストに足す。
   - RE2 は先読み・後読みを扱えない。同じ意味の形に展開し、展開の根拠をコメントに残す。
   - 理由文に入力を JSON 文字列として埋め込むときは `pycompat.QuoteJSON` を使う（`encoding/json` は `<>&` と U+2028 をエスケープする）。
+  - `os.path` のパス処理は `pycompat` の `Normpath`・`Realpath`・`Relpath` などを使う。`filepath.Clean` は先頭の `//` を畳み、
+    `filepath.EvalSymlinks` は存在しないパスでエラーになり、`os.Getwd` は PWD 環境変数を返すことがある。
+  - 先読み・後読みを手書きの走査に置き換えた hook は、`compat/test_differential.py` に足し、
+    Python 実装との差分テスト（既存の表と、それを変形した大量の入力）で不一致が無いことを確かめる。
 - テストは Go に移す。
   - 移植元の Python テストのケースは L2 も含めてすべて表の行として移す。L1 相当は `hooktest` で実運用と同じ経路（stdin の payload、argv）から起動し、判定と発火したルールのラベルを見る。
   - 奇妙な入力（空、`null`、`[]`、型の違う `command`・`tool_input`）、末尾の改行、設定で無効にしたときの無出力を足す。
