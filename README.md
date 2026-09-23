@@ -41,16 +41,9 @@ hhx install
 The installer puts `hhx` in `~/.local/bin`; `hhx install` registers its hooks with the agents already configured on your
 machine. To build from source, run `make install` before `hhx install`.
 
-## Usage
+## Update
 
-To wait for CI:
-
-```sh
-hhx wait-ci --progress       # Wait for the current pull request
-hhx wait-ci 123 --progress   # Wait for a specific pull request
-```
-
-To check for or apply a new release, run `hhx update` or `hhx update --apply`. Hooks do not check for updates while they run.
+Run `hhx update` to check for a new release, or `hhx update --apply` to install it. Hooks do not check for updates while they run.
 
 ## Configuration
 
@@ -75,7 +68,3 @@ a [pull request](https://github.com/HappyOnigiri/HappyHooks/pulls). Documentatio
 ```sh
 curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/uninstall.sh | bash
 ```
-
-## License
-
-[MIT](LICENSE)
