@@ -487,11 +487,12 @@ func collectStrings(value any, out *[]string) {
 const (
 	// registrationCore は Claude の settings*.json と Codex の hooks.json・config.toml である（移植元の正規表現を引き継ぐ）。
 	registrationCore = `\.claude/settings[` + py.WordChars + `.]*\.json|\.codex/(?:hooks\.json|config\.toml)`
-	// guardPrefix は _PRE（トークンの直前に許す文字）である。
-	guardPrefix = `(?:^|[` + py.SpaceChars + `'"=(/>])`
+	// guardPrefix は _PRE（トークンの直前に許す文字）である。行頭の ^ は、checkGuardFiles がセグメントの前に
+	// 空白を 1 つ足すことで表す（走査を途中から再開したときに ^ が一致しないようにするため）。
+	guardPrefix = `[` + py.SpaceChars + `'"=(/>]`
 	// hhxPrefix は hhx の保護対象のトークンの直前に許す文字である。/ を含めないのは、/tmp/x/~/.config/hhx のような
 	// 別のパスの途中から一致させないためである。
-	hhxPrefix = `(?:^|[` + py.SpaceChars + `'"=(>])`
+	hhxPrefix = `[` + py.SpaceChars + `'"=(>]`
 	// hhxTerminator は hhx の保護対象の直後の 1 文字である。hhx.bak のような別名のファイルまで止めないために置く。
 	hhxTerminator = `(?:[^` + py.WordChars + `.\-]|$)`
 	// pathTail は保護対象のディレクトリの配下（移植元の hooks(?:/[^\s'"|;&]*)? と同じ形）である。
@@ -568,15 +569,23 @@ func checkGuardFiles(normalized string) string {
 		if pattern == nil {
 			pattern = guardPattern()
 		}
-		for _, match := range pattern.FindAllStringSubmatchIndex(segment, -1) {
+		// 移植元の re.finditer はトークンの終わりから次を探す。hhx の保護対象は終端の 1 文字まで消費するので、
+		// FindAll を使わずにトークンの終わりから探し直す（読み飛ばしたトークンの直後の区切り文字を、次の直前の文字に使う）。
+		padded := " " + segment
+		for position := 0; position < len(padded); {
+			match := pattern.FindStringSubmatchIndex(padded[position:])
+			if match == nil {
+				break
+			}
 			start, end := match[2], match[3]
 			if start < 0 {
 				start, end = match[4], match[5]
 			}
-			token := segment[start:end]
+			token := padded[position+start : position+end]
 			if !containsAny(token, guardSkip) {
 				return withToken(targetGuard, token)
 			}
+			position += end
 		}
 	}
 	return ""

@@ -423,6 +423,10 @@ func TestGuardRemoval(t *testing.T) {
 		{Command: "rm -f ~/.claude/settings.local.json", Label: labelGuard},
 		{Command: "mv /Users/alice/.codex/hooks.json /Users/alice/.Trash/x/", Label: labelGuard},
 		{Command: "trash ~/.codex/config.toml", Label: labelGuard},
+		// キャッシュ名を含むトークンを読み飛ばしたあとも、その次のトークンを照合する。
+		{Command: "rm ~/.config/hhx/__pycache__ .claude/settings.json", Label: labelGuard + " (.claude/settings.json)"},
+		{Command: "rm ~/.config/hhx/__pycache__ .codex/hooks.json", Label: labelGuard + " (.codex/hooks.json)"},
+		{Command: "rm ~/.config/hhx/__pycache__ ~/.config/hhx", Label: labelGuard + " (~/.config/hhx)"},
 	})
 }
 
