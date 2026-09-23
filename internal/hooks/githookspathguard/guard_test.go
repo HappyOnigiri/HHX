@@ -174,6 +174,16 @@ func TestFileToolBlocksRepositoryConfigPaths(t *testing.T) {
 	}
 }
 
+// 回避を思いとどまらせるのは理由文だけなので、迂回せずユーザーに伝えるよう促す（README の Limits）。
+func TestReasonAsksToReportInsteadOfWorkingAround(t *testing.T) {
+	got := runRaw(t, fileToolPayload("Edit", "/tmp/repo/.git/config"))
+	for _, part := range []string{"迂回する別コマンド・別ツールを試さず", "ユーザーに伝えて指示を仰いで"} {
+		if !strings.Contains(got.Reason, part) {
+			t.Errorf("reason %q does not contain %q", got.Reason, part)
+		}
+	}
+}
+
 func TestAllowsReads(t *testing.T) {
 	check(t, "",
 		"git config "+keyName,

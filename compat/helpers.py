@@ -35,9 +35,11 @@ if TARGET not in ("hhx", "python"):
 
 # hhx へ移植済みの hook 名。移植した hook はここへ足し、その L1・L3 を hhx に向けて全件通す。
 PORTED_HOOKS = frozenset({
+    "dangerous-rm-guard",
     "forbidden-term-guard",
     "git-hookspath-guard",
     "idle-wait-guard",
+    "irreversible-guard",
     "pr-merge-guard",
 })
 
@@ -237,6 +239,29 @@ def load_hook(script, seed=GATE_SEED):
         sys.argv = saved_argv
     _LOADED[script] = module
     return module
+
+
+def load_python_hook(script, seed=GATE_SEED):
+    """HHX_COMPAT_TARGET によらず、Python 本体をモジュールとして読み込む (差分テスト用)。
+
+    HHX_COMPAT_PYTHON_HOOKS が無ければ、呼んだテストを skip する。
+    """
+    if not os.environ.get("HHX_COMPAT_PYTHON_HOOKS"):
+        raise unittest.SkipTest("差分テストには HHX_COMPAT_PYTHON_HOOKS (Python 本体のディレクトリ) が必要")
+    key = ("python", script)
+    if key not in _LOADED:
+        saved_argv = sys.argv
+        sys.argv = ["hook-test", seed]
+        try:
+            name = "hook_python_" + script.removesuffix(".py").replace("-", "_")
+            spec = importlib.util.spec_from_file_location(name, _python_hooks_dir() / script)
+            assert spec is not None and spec.loader is not None, f"{script} を読み込めません"
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        finally:
+            sys.argv = saved_argv
+        _LOADED[key] = module
+    return _LOADED[key]
 
 
 class _SkipOnUse:

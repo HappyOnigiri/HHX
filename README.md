@@ -64,6 +64,8 @@ A missing or broken file never stops a hook: hooks fall back to their defaults.
 | `pr-merge-guard` | on | Merging a pull request: `gh pr merge`, the merge REST endpoints, the GraphQL merge mutations, GitHub API updates through `curl` / `wget`, and `git fetch ... pull/N/head` |
 | `idle-wait-guard` | on | Commands that do nothing but wait or print literals (`sleep 600`, `echo ok`), which agents use to fill turns while waiting |
 | `forbidden-term-guard` | on | Sending a PR or issue body that contains a term from the repository's list (see [docs/forbidden-terms.md](docs/forbidden-terms.md)) |
+| `irreversible-guard` | on | Operations nobody can undo: revoking or deleting credentials, publishing to package registries (unless `--dry-run`), deleting remote resources, destroying Git objects, erasing disks or backups, writing to secret files (`.env*`, `~/.ssh`, `*.pem`) from any tool, and deleting or moving hhx itself, `~/.config/hhx`, or the files that register the hooks |
+| `dangerous-rm-guard` | on (Claude Code only) | The `rm` / `rmdir` forms that Claude Code's built-in check would stop with a confirmation prompt that no permission setting can skip: paths that start with a possibly empty variable, targets that cannot be resolved statically, critical directories, and the working directory or its ancestors |
 | `git-hookspath-guard` | off | Changing `core.hooksPath`, and editing Git config files such as `.git/config` directly |
 
 Messages shown to the agent are currently in Japanese.
@@ -77,6 +79,10 @@ hooks:
 ```
 
 `forbidden-term-guard` does nothing unless the repository has `forbidden-terms.txt` in its common Git directory.
+
+`dangerous-rm-guard` follows the rules of the built-in check in Claude Code v2.1.239 and denies those commands first,
+so the agent gets a reason it can act on instead of a prompt that interrupts the user.
+Newer Claude Code versions may have changed the built-in check.
 
 ### Allowing merges for one session
 

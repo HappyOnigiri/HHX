@@ -19,6 +19,17 @@ HHX_COMPAT_TARGET=python HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレク�
 | `HHX_BIN` | 対象の hhx。既定は `bin/hhx` |
 | `HHX_COMPAT_PYTHON_HOOKS` | `python` のときに起動する Python 本体のディレクトリ |
 
+対象が `hhx` で `HHX_COMPAT_PYTHON_HOOKS` を渡したときは、差分テスト（`test_differential.py`）も流れる。
+同じ入力を Python 本体（プロセス内で `main` を呼ぶ）と `hhx hook <name>` の両方に通し、判定と理由文
+（発火したルールのラベルと、抽出したトークン・解決後のパス）が一致するかを比べる。
+入力は既存のテストがフックに渡している入力と、それに境界の断片（区切り文字・クォート・`>`・`.pub`・`.env.<x>`・
+Unicode の空白や語の文字など）を差し込んだ変形である。`HHX_DIFF_SEED` で乱数の種を、`HHX_DIFF_CASES` で変形の数を変えられる。
+意図して仕様を変えた入力（irreversible-guard の G 類の旧保護対象と hhx 自身のパス）は比べない。
+
+```sh
+HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレクトリ> make compat-test
+```
+
 対象が `hhx` のとき、`helpers.py` は `HHX_CONFIG` を一時的な設定ファイルへ固定し、手元の `~/.config/hhx/config.yaml` を読ませない。
 その設定ファイルは、既定で無効な hook（`helpers.DEFAULT_OFF_HOOKS`）だけを有効にする。
 
@@ -48,3 +59,6 @@ HHX_COMPAT_TARGET=python HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレク�
 - `test_worktree_guard.py` の並行実行のテストで、スレッドに入る前に `hook_command` を呼ぶ
   （スレッドの中で起きた skip はテストに届かないため）。
 - hhx に入れない hook のテスト（agent-worktree-guard、worktree-context）は複製していない。
+- `test_irreversible_guard.py` の G 類（ガードファイル）は、保護対象を hhx の実行ファイル・`~/.config/hhx`・hook の登録ファイルに
+  置き換えた。旧配布先（`~/.claude/hooks`・`~/.codex/hooks`）と dotfiles の正本は、hhx では通過を期待し、Python では元の deny のまま流す。
+  `WT_AGENT_WORKTREE_POLICY` を前提にした `OnDemandFileToolPassThroughTest` は、hhx では skip する。

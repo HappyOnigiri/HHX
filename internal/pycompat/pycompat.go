@@ -3,9 +3,13 @@
 // Go の regexp の \s・\d・\b と strings.Fields は ASCII か Go 独自の空白の定義で動き、Python（str のパターン）と
 // 一致する文字の範囲が違う。移植した正規表現はここにある文字クラスで書き、空白での分割もここの関数で行う。
 // シェルのコマンドの分割やトークンの解釈は hook ごとに違うので、ここには置かない（AGENTS.md の不変条件）。
+// 文字の分類は Go の unicode の表で行うので、Unicode の版の違い（Python 3.14 は 16.0）による差は残る。
 package pycompat
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // SpaceChars は Python の str.isspace() と、str パターンの \s が一致する文字の集合を、文字クラスの中身として書いたものである。
 // `[^/\s]` のような文字クラスは `[^/` + SpaceChars + `]` と書く。
@@ -30,10 +34,17 @@ const Digit = `\p{Nd}`
 
 // Word は Python の \w、NotWord は \W にあたる文字クラスである。
 // Python の \w は str.isalnum() の文字と _ で、Go の \w と \b は ASCII の英数字と _ しか語の文字とみなさない。
+// WordChars はその文字クラスの中身で、`[\w.-]` のような文字クラスは `[` + WordChars + `.-]` と書く。
 const (
-	Word    = `[\p{L}\p{N}_]`
-	NotWord = `[^\p{L}\p{N}_]`
+	WordChars = `\p{L}\p{N}_`
+	Word      = `[` + WordChars + `]`
+	NotWord   = `[^` + WordChars + `]`
 )
+
+// IsWord は Python の \w と同じ判定を 1 文字に対して行う。
+func IsWord(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_'
+}
 
 // NotWordOrEnd は Python の \w の直後に置いた \b と同じ位置で一致する。
 // 1 文字を消費するので、後ろに続くパターンが無いときにだけ使う。
@@ -63,6 +74,66 @@ func Fields(s string) []string {
 // Strip は Python の str.strip()（引数なし）と同じく、両端の空白を除く。
 func Strip(s string) string {
 	return strings.TrimFunc(s, IsSpace)
+}
+
+// LStrip は Python の str.lstrip()（引数なし）と同じく、先頭の空白を除く。
+func LStrip(s string) string {
+	return strings.TrimLeftFunc(s, IsSpace)
+}
+
+// Lower は Python の str.lower() と同じく小文字にする。
+// Go の strings.ToLower と違い、İ（U+0130）を i と結合用のドット（U+0307）の 2 文字にし、
+// Σ は語末（Unicode の Final_Sigma の文脈）でだけ ς にする。
+func Lower(s string) string {
+	runes := []rune(s)
+	var out strings.Builder
+	for index, r := range runes {
+		switch r {
+		case 'İ':
+			out.WriteString("i\u0307")
+		case 'Σ':
+			if finalSigma(runes, index) {
+				out.WriteRune('ς')
+			} else {
+				out.WriteRune('σ')
+			}
+		default:
+			out.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return out.String()
+}
+
+// finalSigma は runes[index] の Σ が Final_Sigma の文脈にあるかを返す（CPython の handle_capital_sigma と同じ判定）。
+// 前に（大文字小文字を無視できる文字を飛ばして）大文字小文字のある文字があり、後ろには無いときである。
+func finalSigma(runes []rune, index int) bool {
+	before := index - 1
+	for before >= 0 && isCaseIgnorable(runes[before]) {
+		before--
+	}
+	if before < 0 || !isCased(runes[before]) {
+		return false
+	}
+	after := index + 1
+	for after < len(runes) && isCaseIgnorable(runes[after]) {
+		after++
+	}
+	return after == len(runes) || !isCased(runes[after])
+}
+
+func isCased(r rune) bool {
+	return unicode.In(r, unicode.Lu, unicode.Ll, unicode.Lt, unicode.Other_Lowercase, unicode.Other_Uppercase)
+}
+
+// isCaseIgnorable は Unicode の Case_Ignorable である。
+// Go の unicode に Word_Break の表が無いので、MidLetter・MidNumLet・Single_Quote の文字は並べて書く。
+func isCaseIgnorable(r rune) bool {
+	switch r {
+	case '\'', '.', ':', 0xB7, 0x387, 0x55F, 0x5F4, 0x2018, 0x2019, 0x2024, 0x2027,
+		0xFE13, 0xFE52, 0xFE55, 0xFF07, 0xFF0E, 0xFF1A:
+		return true
+	}
+	return unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf, unicode.Lm, unicode.Sk)
 }
 
 // isLineBoundary は Python の str.splitlines() が行の区切りとみなす文字である。
