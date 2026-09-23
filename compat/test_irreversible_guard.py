@@ -18,7 +18,8 @@ import time
 import unittest
 from pathlib import Path
 
-from helpers import HookTestCase, git, hook_command, load_hook, make_repo, run_hook, run_hook_argv
+from helpers import (TARGET, HookTestCase, git, hook_command, hook_command_for_name, load_hook, make_repo,
+                     run_hook, run_hook_argv)
 
 SCRIPT = "irreversible-guard.py"
 
@@ -334,30 +335,66 @@ class GuardFileTest(HookTestCase):
 
     def test_guard_removal(self):
         self.check_table([
-            ("rm -rf ~/.codex/hooks", L_GUARD),
             ("rm ~/.codex/hooks.json", L_GUARD),
             ("rm ~/.codex/config.toml", L_GUARD),
             ("rm ~/.claude/settings.json", L_GUARD),
             ("rm -f ~/.claude/settings.local.json", L_GUARD),
-            ("rm ~/.claude/hooks/irreversible-guard.py", L_GUARD),
-            ("mv ~/.claude/hooks ~/.Trash/", L_GUARD),
             ("mv /Users/alice/.codex/hooks.json /Users/alice/.Trash/x/", L_GUARD),
             ("trash ~/.codex/config.toml", L_GUARD),
-            # dotfiles の正本。消すと全 PC のガードが次の配布で消える。
-            ("rm files/agent-config/claude/hooks/irreversible-guard.py", L_GUARD),
-            ("rm -rf ~/dotfiles/files/agent-config/claude/hooks", L_GUARD),
-            ("rm files/agent-config/claude/settings.common.json", L_GUARD),
-            ("mv files/agent-config/codex/hooks.json /tmp/", L_GUARD),
         ], expected="deny")
 
     def test_notation_variants(self):
         self.check_table([
             ("/bin/rm ~/.claude/settings.local.json", L_GUARD),
             ("true;rm ~/.claude/settings.json", L_GUARD),
-            ("rm -rf /Users/alice/.codex/hooks", L_GUARD),
-            ("mv ~/.claude/hooks/pr-merge-guard.py /tmp/", L_GUARD),
             ("echo x\nrm ~/.codex/hooks.json", L_GUARD),
         ], expected="deny")
+
+    def test_legacy_hook_locations(self):
+        """Python 実装の配布先 (~/.claude/hooks・~/.codex/hooks) と dotfiles の正本。
+
+        hhx では hook の実体がもう無いので、保護対象から外した (意図した仕様の変更)。
+        Python 実装を対象にしたときは、元の期待値 (deny) で流す。
+        """
+        self.check_table([
+            ("rm -rf ~/.codex/hooks", L_GUARD),
+            ("rm ~/.claude/hooks/irreversible-guard.py", L_GUARD),
+            ("mv ~/.claude/hooks ~/.Trash/", L_GUARD),
+            ("rm -rf /Users/alice/.codex/hooks", L_GUARD),
+            ("mv ~/.claude/hooks/pr-merge-guard.py /tmp/", L_GUARD),
+            ("rm files/agent-config/claude/hooks/irreversible-guard.py", L_GUARD),
+            ("rm -rf ~/dotfiles/files/agent-config/claude/hooks", L_GUARD),
+            ("rm files/agent-config/claude/settings.common.json", L_GUARD),
+            ("mv files/agent-config/codex/hooks.json /tmp/", L_GUARD),
+        ] if TARGET == "python" else [
+            "rm -rf ~/.codex/hooks",
+            "rm ~/.claude/hooks/irreversible-guard.py",
+            "mv ~/.claude/hooks ~/.Trash/",
+            "rm -rf /Users/alice/.codex/hooks",
+            "mv ~/.claude/hooks/pr-merge-guard.py /tmp/",
+            "rm files/agent-config/claude/hooks/irreversible-guard.py",
+            "rm -rf ~/dotfiles/files/agent-config/claude/hooks",
+            "rm files/agent-config/claude/settings.common.json",
+            "mv files/agent-config/codex/hooks.json /tmp/",
+        ], expected="deny" if TARGET == "python" else None)
+
+    @unittest.skipUnless(TARGET == "hhx", "hhx の実行ファイルと設定ディレクトリは hhx だけが守る")
+    def test_hhx_itself(self):
+        """hhx の実行ファイル (起動したもの) と設定ディレクトリ (~/.config/hhx) の削除・移動。"""
+        binary = hook_command_for_name("irreversible-guard")[0]
+        self.check_table([
+            (f"rm {binary}", L_GUARD),
+            (f"mv {binary} /tmp/", L_GUARD),
+            ("rm -rf ~/.config/hhx", L_GUARD),
+            ("rm ~/.config/hhx/config.yaml", L_GUARD),
+            ("mv $HOME/.config/hhx /tmp/", L_GUARD),
+        ], expected="deny")
+        self.check_table([
+            f"cp {binary} /tmp/hhx",
+            f"rm {binary}.bak",
+            "rm ~/.config/hhx.bak",
+            "vim ~/.config/hhx/config.yaml",
+        ], expected=None)
 
 
 # --- L1 契約テスト: 通過側 ---------------------------------------------------
@@ -644,6 +681,8 @@ class FileToolPayloadTest(unittest.TestCase):
         self.assert_pass("Grep", {"pattern": "TOKEN", "path": "/Users/alice/dev/app/.envrc"})
 
 
+@unittest.skipIf(TARGET == "hhx", "WT_AGENT_WORKTREE_POLICY による切り替えは hhx に入れない "
+                                   "(秘密ファイルを Write でも塞ぐ観点は FileToolPayloadTest にある)")
 class OnDemandFileToolPassThroughTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="main-file-guard-")
