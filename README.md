@@ -9,9 +9,25 @@ Happy Hooks helps Claude Code and Codex stay on track during long-running tasks.
 - **Keep work moving:** Guard against avoidable confirmation prompts and common mistakes that interrupt an agent.
 - **Wait efficiently:** Give the agent a way to wait for CI without repeatedly checking individual jobs.
 - **Add context when needed:** Supply relevant PR details and local instructions as the agent works.
-- **Protect uncommitted work:** Save a Git snapshot before commands that discard changes.
 
 Command guards inspect text statically. They catch common mistakes, but are not a security boundary.
+
+## Hooks
+
+| Hook | What it does | Default |
+| --- | --- | --- |
+| `pr-merge-guard` | Stops agents from merging PRs | On |
+| `discard-guard` | Saves a snapshot before Git commands discard changes | On |
+| `idle-wait-guard` | Stops commands used only to fill time | On |
+| `forbidden-term-guard` | Blocks configured terms in PR and issue bodies | On |
+| `irreversible-guard` | Blocks irreversible operations | On |
+| `dangerous-rm-guard` | Stops risky `rm` commands before Claude Code asks for confirmation | On (Claude Code) |
+| `exit-plan-subagent-guard` | Keeps plan mode open until background agents finish | On (Claude Code) |
+| `git-hookspath-guard` | Blocks changes to Git hook settings | Off |
+| `pr-context` | Adds context about PR links in prompts | On |
+| `push-ci-context` | Explains how to wait for CI after a push | On |
+| `pr-body-staleness` | Flags PR descriptions that may be out of date | On |
+| `agents-local-context` | Adds applicable `AGENTS.local.md` instructions | On (Codex) |
 
 ## Install
 
@@ -26,7 +42,7 @@ The installer puts `hhx` in `~/.local/bin`; `hhx install` registers its hooks wi
 
 ## Usage
 
-Hooks run automatically after installation. For CI, the agent can use:
+To wait for CI:
 
 ```sh
 hhx wait-ci --progress       # Wait for the current pull request
@@ -42,22 +58,11 @@ Use `~/.config/hhx/config.yaml` to choose a display language or disable a hook:
 ```yaml
 language: ja  # en (default) or ja
 hooks:
-  some-hook:
+  idle-wait-guard:
     enabled: false
 ```
 
-Changes take effect without reinstalling. See `hhx --help` for commands and options, and [forbidden-term-guard setup](docs/forbidden-terms.md) for its repository-specific list.
-
-## Recovering discarded changes
-
-Before a Git command that discards uncommitted changes, `discard-guard` saves tracked and untracked files to `refs/hhx/discard-snapshot`. To find and restore a snapshot:
-
-```sh
-git reflog show --format='%gd %gs' refs/hhx/discard-snapshot
-git restore --source='refs/hhx/discard-snapshot@{N}' --worktree -- .
-```
-
-Replace `N` with the entry for your worktree. The index is left alone. Ignored files and uncommitted changes inside submodules are not saved.
+Changes take effect without reinstalling. See [forbidden-term-guard setup](docs/forbidden-terms.md) for its repository-specific list.
 
 ## Contributing
 
@@ -68,8 +73,6 @@ Contributions are welcome. Share bugs and ideas in [Issues](https://github.com/H
 ```sh
 curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/uninstall.sh | bash
 ```
-
-This removes the hook entries and binary. Configuration and caches remain; the script prints their locations.
 
 ## License
 

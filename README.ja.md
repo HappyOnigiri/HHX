@@ -9,9 +9,25 @@ Happy Hooks は、Claude Code と Codex が長時間の作業を滞りなく進�
 - **作業を止めない:** 不要な確認プロンプトや、作業を中断させるよくある誤りを防ぎます。
 - **効率よく待つ:** ジョブごとに何度も確認せずに CI を待つ方法をエージェントに案内します。
 - **必要な情報を渡す:** PR の情報やローカルの指示を、作業中の適切な場面で注入します。
-- **未コミットの変更を守る:** 変更を破棄するコマンドの前に Git の snapshot を保存します。
 
 コマンドを検査する hook は、静的な判定でよくある誤りを止めます。セキュリティ境界ではありません。
+
+## hook 一覧
+
+| hook | 役割 | 既定 |
+| --- | --- | --- |
+| `pr-merge-guard` | エージェントによる PR のマージを止める | 有効 |
+| `discard-guard` | Git で変更を破棄する前に snapshot を保存する | 有効 |
+| `idle-wait-guard` | 時間を埋めるだけのコマンドを止める | 有効 |
+| `forbidden-term-guard` | PR・issue の本文に設定済みの禁止語があれば止める | 有効 |
+| `irreversible-guard` | 元に戻せない操作を止める | 有効 |
+| `dangerous-rm-guard` | Claude Code の確認待ちになる危険な `rm` を先に止める | 有効（Claude Code） |
+| `exit-plan-subagent-guard` | バックグラウンドのエージェントが終わるまでプランモードを維持する | 有効（Claude Code） |
+| `git-hookspath-guard` | Git の hook 設定の変更を止める | 無効 |
+| `pr-context` | プロンプト中の PR の情報を注入する | 有効 |
+| `push-ci-context` | push 後に CI の待ち方を案内する | 有効 |
+| `pr-body-staleness` | PR の本文が古い可能性を知らせる | 有効 |
+| `agents-local-context` | 適用される `AGENTS.local.md` の指示を注入する | 有効（Codex） |
 
 ## インストール
 
@@ -26,7 +42,7 @@ hhx install
 
 ## 使い方
 
-インストール後、hook は自動的に動きます。CI の待機には次のコマンドを使えます。
+CI を待つには、次のコマンドを使います。
 
 ```sh
 hhx wait-ci --progress       # 現在の PR を待つ
@@ -42,22 +58,11 @@ hhx wait-ci 123 --progress   # 指定した PR を待つ
 ```yaml
 language: ja  # en（既定）か ja
 hooks:
-  some-hook:
+  idle-wait-guard:
     enabled: false
 ```
 
-変更に再インストールは不要です。コマンドとオプションは `hhx --help`、リポジトリごとの禁止語リストは[forbidden-term-guard の設定](docs/forbidden-terms.md)を参照してください。
-
-## 破棄した変更の復元
-
-`discard-guard` は、未コミットの変更を破棄する Git コマンドの前に、追跡中・未追跡のファイルを `refs/hhx/discard-snapshot` に保存します。snapshot を探して復元するには、次を実行します。
-
-```sh
-git reflog show --format='%gd %gs' refs/hhx/discard-snapshot
-git restore --source='refs/hhx/discard-snapshot@{N}' --worktree -- .
-```
-
-`N` は対象の作業ツリーの番号に置き換えます。index は変わりません。無視されたファイルと submodule 内の未コミットの変更は保存されません。
+変更に再インストールは不要です。リポジトリごとの禁止語リストは[forbidden-term-guard の設定](docs/forbidden-terms.md)を参照してください。
 
 ## コントリビュート
 
@@ -68,8 +73,6 @@ git restore --source='refs/hhx/discard-snapshot@{N}' --worktree -- .
 ```sh
 curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/uninstall.sh | bash
 ```
-
-hook の登録とバイナリを削除します。設定とキャッシュは残り、その場所をスクリプトが表示します。
 
 ## ライセンス
 
