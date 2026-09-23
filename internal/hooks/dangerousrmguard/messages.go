@@ -6,11 +6,11 @@ import "github.com/HappyOnigiri/hhx/internal/i18n"
 //   - REWRITE: 安全な書き直しがある分岐。書き直して再実行してよいと案内する（冒頭は「確認は不要」の 1 文）。
 //     案内する書き直し先は、実際にこの hook を通ること（通らないなら通らないと書くこと）をテストで縛る。
 //   - REPORT: 対象そのものが問題の分岐。削除せずに済む手段 → 範囲を狭める → ユーザーに判断を仰ぐ、の順に案内する
-//     （冒頭は「次の順に検討し、どうしても無理なときだけ作業を止める」）。
+//     （冒頭は REWRITE と同じ「確認は不要」の 1 文に続けて「次の順に検討し、どうしても無理なときだけ作業を止める」）。
 //     同じ範囲を別記法・別の作業ディレクトリで消す形は迂回になるので禁じる。
 //
-// 英語でも系統の違いが分かるよう、REWRITE は "You do not need to ask the user before rewriting ..."、
-// REPORT は "Work through the following in order, and stop only if ..." で書き出しを揃える。
+// 英語でも系統の違いが分かるよう、両系統とも "You do not need to ask the user before rewriting ..." で始め、
+// REPORT はその後を "Work through the following in order, and stop only if ..." で揃える。
 const (
 	idReason = "dangerous-rm-guard.reason"
 	idNoAsk  = "dangerous-rm-guard.no-ask"
@@ -53,7 +53,7 @@ var messages = i18n.Register(i18n.Catalog{
 		EN: "❌ Blocked: {{.Target}}\n\nReason: {{.Why}}\n\nAction: {{.How}}",
 		JA: "❌ ブロック: {{.Target}}\n\n理由: {{.Why}}\n\n対応: {{.How}}",
 	},
-	// REWRITE 系の書き出し。書き直しての再実行はユーザーに確かめなくてよい。
+	// 理由文の書き出し（REWRITE・REPORT の両系統）。書き直しての再実行はユーザーに確かめなくてよい。
 	idNoAsk: {
 		EN: "You do not need to ask the user before rewriting and running it again.",
 		JA: "書き直して再実行するのにユーザーへの確認は不要です。",
@@ -150,7 +150,7 @@ var messages = i18n.Register(i18n.Catalog{
 	},
 	// REPORT: システムの重要ディレクトリ。消さずに済むか → 範囲を狭める → 判断を仰ぐ、の順。別記法で同じ範囲を消す形を禁じる。
 	idHowCritical: {
-		EN: "Work through the following in order, and stop only if none of them works.\n" +
+		EN: "{{.NoAsk}} Work through the following in order, and stop only if none of them works.\n" +
 			"  1. Can you avoid deleting at all? If you use a variable, check its expansion with `echo`; " +
 			"for a relative path, check `pwd` and the number of `..`. Most cases are an empty variable or a misspelled path, " +
 			"and then there is nothing to delete\n" +
@@ -159,7 +159,7 @@ var messages = i18n.Register(i18n.Catalog{
 			"  3. If neither works, stop, tell the user the purpose and the target, and ask for a decision\n" +
 			"Deleting the same range with a different notation (e.g. `/usr` → `/usr/*`) is forbidden, because it only " +
 			"dodges the check and deletes the same range.",
-		JA: "次の順に検討し、どうしても無理なときだけ作業を止めてください。\n" +
+		JA: "{{.NoAsk}}次の順に検討し、どうしても無理なときだけ作業を止めてください。\n" +
 			"  1. そもそも削除せずに済ませられないか — 変数を使っているなら `echo` で展開結果を、" +
 			"相対パスなら `pwd` と `..` の数を確認する。空変数やパスの綴りの事故がほとんどで、" +
 			"その場合は消す必要自体がありません\n" +
@@ -171,7 +171,7 @@ var messages = i18n.Register(i18n.Catalog{
 	},
 	// REPORT: 作業ディレクトリの親。専用コマンド → 範囲を狭める → 判断を仰ぐ、の順。cd で移ってから消す形を禁じる。
 	idHowAncestor: {
-		EN: "Work through the following in order, and stop only if none of them works.\n" +
+		EN: "{{.NoAsk}} Work through the following in order, and stop only if none of them works.\n" +
 			"  1. Can you avoid deleting at all? To clean up a worktree or a temporary directory, " +
 			"use the dedicated command " +
 			"(e.g. `git -C <main> worktree remove --force <path>`; it succeeds even if the cwd is inside it)\n" +
@@ -180,7 +180,7 @@ var messages = i18n.Register(i18n.Catalog{
 			"  3. If neither works, stop, tell the user the purpose and the target, and ask for a decision\n" +
 			"Moving the working directory with `cd` and then deleting the same target is forbidden, because it only " +
 			"dodges the check and deletes the same range.",
-		JA: "次の順に検討し、どうしても無理なときだけ作業を止めてください。\n" +
+		JA: "{{.NoAsk}}次の順に検討し、どうしても無理なときだけ作業を止めてください。\n" +
 			"  1. そもそも削除せずに済ませられないか — worktree や一時ディレクトリの後始末なら" +
 			"専用コマンドを使う " +
 			"(例: `git -C <main> worktree remove --force <path>`。cwd がその中にあっても成功します)\n" +
@@ -192,14 +192,14 @@ var messages = i18n.Register(i18n.Catalog{
 	},
 	// REPORT: 作業ディレクトリ自身。専用コマンド → 実体パスで列挙して再実行 → 判断を仰ぐ、の順。
 	idHowCWDItself: {
-		EN: "Work through the following in order, and stop only if none of them works.\n" +
+		EN: "{{.NoAsk}} Work through the following in order, and stop only if none of them works.\n" +
 			"  1. Can a dedicated command do it? To clean up a worktree, use " +
 			"`git -C <main> worktree remove --force <path>` (it succeeds even if the cwd is inside it); " +
 			"for generated files under git, use `git clean -fd <path>`\n" +
 			"  2. Can you narrow the range? If you only want to delete the contents, list the targets as real paths " +
 			"and run it again (e.g. rm -rf ./build ./dist)\n" +
 			"  3. If neither works, stop, tell the user the purpose and the target, and ask for a decision",
-		JA: "次の順に検討し、どうしても無理なときだけ作業を止めてください。\n" +
+		JA: "{{.NoAsk}}次の順に検討し、どうしても無理なときだけ作業を止めてください。\n" +
 			"  1. 専用コマンドで済ませられないか — worktree の後始末なら " +
 			"`git -C <main> worktree remove --force <path>` (cwd がその中にあっても成功します)、" +
 			"git 管理下の生成物なら `git clean -fd <path>`\n" +
