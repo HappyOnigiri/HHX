@@ -70,7 +70,7 @@ func run(c *hookrt.Context) error {
 	// command があれば Bash と同じに解析し、無ければ通す（移植元と同じ）。
 	if toolName == "Edit" || toolName == "Write" {
 		if path, _ := toolInput["file_path"].(string); isGitConfigPath(path) {
-			c.Deny(denyReason)
+			c.Deny(messages.T(c.Language(), idReason))
 		}
 		return nil
 	}
@@ -81,7 +81,7 @@ func run(c *hookrt.Context) error {
 	}
 	for _, segment := range separatorRE.Split(command, -1) {
 		if isWrite(segment) || isDirectConfigWrite(segment) {
-			c.Deny(denyReason)
+			c.Deny(messages.T(c.Language(), idReason))
 			return nil
 		}
 	}

@@ -7,7 +7,7 @@ import (
 	"github.com/HappyOnigiri/hhx/internal/hooktest"
 )
 
-const backgroundSentencePrefix = "バックグラウンド実行は即座に戻る"
+var backgroundSentence = messages.T(hooktest.Language, idWaitBackground)
 
 func runBash(t *testing.T, command string, background any) hooktest.Result {
 	t.Helper()
@@ -49,19 +49,20 @@ func TestForegroundSleep(t *testing.T) {
 func TestReasonMentionsBackgroundOnlyWhenBackground(t *testing.T) {
 	background := runBash(t, "sleep 600", true).Reason
 	foreground := runBash(t, "sleep 600", false).Reason
-	if !strings.Contains(background, backgroundSentencePrefix) {
+	if !strings.Contains(background, backgroundSentence) {
 		t.Errorf("background reason: %q", background)
 	}
-	if strings.Contains(foreground, backgroundSentencePrefix) || !strings.Contains(foreground, waitForegroundSentence) {
+	if strings.Contains(foreground, backgroundSentence) || !strings.Contains(foreground, messages.T(hooktest.Language, idWaitForeground)) {
 		t.Errorf("foreground reason: %q", foreground)
 	}
-	for _, reason := range []string{background, foreground} {
-		if !strings.Contains(reason, "ターンを終えて") {
-			t.Errorf("reason must offer to end the turn: %q", reason)
-		}
+	if want := reason(hooktest.Language, waitLabel, true, `"sleep 600"`); background != want {
+		t.Errorf("background reason=%q, want %q", background, want)
+	}
+	if want := reason(hooktest.Language, waitLabel, false, `"sleep 600"`); foreground != want {
+		t.Errorf("foreground reason=%q, want %q", foreground, want)
 	}
 	// run_in_background は JSON の true のときだけバックグラウンドとみなす。
-	if got := runBash(t, "sleep 600", "true").Reason; strings.Contains(got, backgroundSentencePrefix) {
+	if got := runBash(t, "sleep 600", "true").Reason; strings.Contains(got, backgroundSentence) {
 		t.Errorf("a string run_in_background must be treated as foreground: %q", got)
 	}
 }
@@ -69,7 +70,7 @@ func TestReasonMentionsBackgroundOnlyWhenBackground(t *testing.T) {
 // run_in_background は省略時にキー自体が無い。落ちずに前景として扱う。
 func TestOmittedBackgroundKeyBehavesAsForeground(t *testing.T) {
 	got := runBash(t, "sleep 600", nil)
-	if got.Decision != hooktest.Deny || !strings.Contains(got.Reason, "WAIT") || strings.Contains(got.Reason, backgroundSentencePrefix) {
+	if got.Decision != hooktest.Deny || !strings.Contains(got.Reason, "WAIT") || strings.Contains(got.Reason, backgroundSentence) {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -97,23 +98,25 @@ func TestBackgroundNoopIsDeniedToo(t *testing.T) {
 
 func TestReasonOffersAlternatives(t *testing.T) {
 	got := runBash(t, "echo ok", nil).Reason
-	for _, part := range []string{"ターンを終えて", "書き換えて再実行しないでください"} {
-		if !strings.Contains(got, part) {
-			t.Errorf("reason %q does not contain %q", got, part)
-		}
+	if !strings.HasSuffix(got, "\n"+messages.T(hooktest.Language, idNoopDetail)) {
+		t.Errorf("reason %q does not end with the NOOP guidance", got)
 	}
 }
 
 // UI で理由が省略されても、先頭だけで拒否の対象を特定できる。コマンドは Python の json.dumps と同じ形で埋め込む。
 func TestReasonStartsWithRejectedCommand(t *testing.T) {
-	cases := map[string]string{
-		"echo ok; true":            `NOOP: 拒否対象コマンド: "echo ok; true"` + "\n",
-		"echo first\necho second":  `NOOP: 拒否対象コマンド: "echo first\necho second"` + "\n",
-		"echo a && echo b":         `NOOP: 拒否対象コマンド: "echo a && echo b"` + "\n",
-		"echo 'x' \"y\" \\ \t\x01": `NOOP: 拒否対象コマンド: "echo 'x' \"y\" \\ \t\u0001"` + "\n",
-		"sleep 1  ":                "WAIT: 拒否対象コマンド: \"sleep 1  \"\n",
+	cases := map[string][2]string{
+		"echo ok; true":            {noopLabel, `"echo ok; true"`},
+		"echo first\necho second":  {noopLabel, `"echo first\necho second"`},
+		"echo a && echo b":         {noopLabel, `"echo a && echo b"`},
+		"echo 'x' \"y\" \\ \t\x01": {noopLabel, `"echo 'x' \"y\" \\ \t\u0001"`},
+		"sleep 1  ":                {waitLabel, `"sleep 1  "`},
 	}
-	for command, prefix := range cases {
+	for command, want := range cases {
+		prefix := messages.Text(hooktest.Language, idReason, map[string]any{"Label": want[0], "Command": want[1], "Detail": ""})
+		if !strings.HasPrefix(prefix, want[0]+": ") || !strings.HasSuffix(prefix, want[1]+"\n") {
+			t.Fatalf("the reason must start with the label and end the first line with the command: %q", prefix)
+		}
 		if got := runBash(t, command, nil).Reason; !strings.HasPrefix(got, prefix) {
 			t.Errorf("%q: reason %q does not start with %q", command, got, prefix)
 		}
@@ -175,18 +178,18 @@ func TestKnownGapBareColon(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	// ゲートを通れば `:` も無効果のコマンドとして扱う。
-	if label, _ := classify(":"); label != noopLabel {
+	if label := classify(":"); label != noopLabel {
 		t.Fatalf("classify(:)=%q", label)
 	}
 }
 
 func TestClassifyIgnoresEmptySegments(t *testing.T) {
 	for _, command := range []string{"", ";", " ; && ", "\n\n", "　"} {
-		if label, _ := classify(command); label != "" {
+		if label := classify(command); label != "" {
 			t.Errorf("classify(%q)=%q, want pass", command, label)
 		}
 	}
-	if label, _ := classify("; echo ok ;"); label != noopLabel {
+	if label := classify("; echo ok ;"); label != noopLabel {
 		t.Errorf("empty segments must not affect the decision, got %q", label)
 	}
 }
@@ -223,7 +226,7 @@ func TestArgvPath(t *testing.T) {
 		}
 	}
 	// argv では run_in_background を渡せないので前景の言い回しになる。
-	if got := hooktest.Argv(t, Definition(), "sleep 1").Reason; strings.Contains(got, backgroundSentencePrefix) {
+	if got := hooktest.Argv(t, Definition(), "sleep 1").Reason; strings.Contains(got, backgroundSentence) {
 		t.Errorf("argv reason: %q", got)
 	}
 }

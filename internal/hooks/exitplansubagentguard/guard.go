@@ -111,7 +111,7 @@ func run(c *hookrt.Context) error {
 	if err != nil || len(pending) == 0 {
 		return err
 	}
-	c.Deny(reason(pending))
+	c.Deny(reason(c.Language(), pending))
 	return nil
 }
 

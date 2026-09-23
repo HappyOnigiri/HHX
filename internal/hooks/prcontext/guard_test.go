@@ -9,8 +9,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/HappyOnigiri/hhx/internal/hooktest"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 )
 
 func TestMain(m *testing.M) {
@@ -208,15 +210,14 @@ func TestGHNotOnPathIsSilent(t *testing.T) {
 func TestOpenPR(t *testing.T) {
 	f := newFixture(t)
 	out := assertBlock(t, f.run(t, "https://github.com/o/r/pull/10088 を確認して", "", "s1"))
-	want := openTag + " PRs referenced in the prompt (metadata only, no body)\n" + note + "\n" +
+	want := messages.T(hooktest.Language, idHeader) + "\n" + messages.T(hooktest.Language, idNote) + "\n" +
 		"o/r#10088 OPEN \"Add bank account review status\"\n" +
 		"  head=feat/bank-account@aaaaaaaa base=main +120-30 7f\n" +
-		localNoClone + "\n" + closeTag + "\n"
+		messages.T(hooktest.Language, idLocalNoClone) + "\n" + closeTag + "\n"
 	if out != want {
 		t.Fatalf("output=\n%s\nwant\n%s", out, want)
 	}
-	mustContain(t, out, "do not assume the current local files contain this PR",
-		"explicitly specifying the PR branch or head SHA/ref", "retrieve it with Git or `gh`")
+	mustContain(t, out, messages.T(hooktest.Language, idNote), "`gh`", "SHA/ref")
 	mustNotContain(t, out, "worktree", "repo=", "on=")
 }
 
@@ -249,9 +250,9 @@ func TestStates(t *testing.T) {
 		"conflict":            {map[string]any{"mergeable": "CONFLICTING"}, []string{"OPEN CONFLICT"}, nil},
 		"draft conflict":      {map[string]any{"isDraft": true, "mergeable": "CONFLICTING"}, []string{"DRAFT CONFLICT"}, nil},
 		"unknown mergeable":   {map[string]any{"mergeable": "UNKNOWN"}, nil, []string{"CONFLICT"}},
-		"closed conflict":     {map[string]any{"state": "CLOSED", "mergeable": "CONFLICTING"}, []string{"o/r#10088 CLOSED"}, []string{"CONFLICT", "MERGED does not put"}},
+		"closed conflict":     {map[string]any{"state": "CLOSED", "mergeable": "CONFLICTING"}, []string{"o/r#10088 CLOSED"}, []string{"CONFLICT", messages.T(hooktest.Language, idNoteMerged)}},
 		"merged conflict":     {map[string]any{"state": "MERGED", "mergeable": "CONFLICTING"}, nil, []string{"CONFLICT"}},
-		"merged into main":    {map[string]any{"state": "MERGED", "mergeCommit": map[string]any{"oid": strings.Repeat("b", 40)}}, []string{"o/r#10088 MERGED ", "merge=bbbbbbbb", "MERGED does not put the code in main"}, []string{"(into"}},
+		"merged into main":    {map[string]any{"state": "MERGED", "mergeCommit": map[string]any{"oid": strings.Repeat("b", 40)}}, []string{"o/r#10088 MERGED ", "merge=bbbbbbbb", messages.T(hooktest.Language, idNoteMerged)}, []string{"(into"}},
 		"merged into feature": {map[string]any{"state": "MERGED", "baseRefName": "feat/parent", "mergeCommit": map[string]any{"oid": strings.Repeat("c", 40)}}, []string{"MERGED(into feat/parent, NOT main)"}, nil},
 		"merged into master":  {map[string]any{"state": "MERGED", "baseRefName": "master"}, nil, []string{"NOT main"}},
 		"no merge commit":     {nil, nil, []string{"merge="}},
@@ -271,8 +272,9 @@ func TestStates(t *testing.T) {
 func TestOutputStaysSmall(t *testing.T) {
 	f := newFixture(t)
 	out := f.run(t, "https://github.com/o/r/pull/10088", "", "s1")
-	if len(out) > 800 {
-		t.Fatalf("one PR is %d bytes", len(out))
+	// 日本語は 1 文字が 3 バイトなので、文字数で数える。
+	if count := utf8.RuneCountInString(out); count > 800 {
+		t.Fatalf("one PR is %d characters", count)
 	}
 	lines := 0
 	for _, line := range strings.Split(strings.Split(out, closeTag)[0], "\n") {
@@ -547,7 +549,7 @@ func TestMergedNoteFollowsTheEmittedBlocks(t *testing.T) {
 	f.run(t, "https://github.com/o/r/pull/1", "", "s1")
 	out := f.run(t, "https://github.com/o/r/pull/1 https://github.com/o/r/pull/2", "", "s1")
 	mustContain(t, out, "o/r#2")
-	mustNotContain(t, out, "o/r#1 ", "MERGED does not put")
+	mustNotContain(t, out, "o/r#1 ", messages.T(hooktest.Language, idNoteMerged))
 }
 
 func TestMultiplePRsAndAnchors(t *testing.T) {
@@ -807,8 +809,8 @@ func TestShorten(t *testing.T) {
 }
 
 func TestFormat(t *testing.T) {
-	out, err := formatPR("o/r", decoded(t, basePR(nil)), "")
-	if err != nil || !strings.Contains(out, "no clone of this repo here") || strings.Contains(out, "repo=") || strings.Contains(out, "merge=") {
+	out, err := formatPR(hooktest.Language, "o/r", decoded(t, basePR(nil)), "")
+	if err != nil || !strings.Contains(out, messages.T(hooktest.Language, idLocalNoClone)) || strings.Contains(out, "repo=") || strings.Contains(out, "merge=") {
 		t.Errorf("formatPR=%q err=%v", out, err)
 	}
 	line, err := formatComment(decoded(t, map[string]any{"id": "9", "user": "bot", "path": "a/b.go", "line": 3}))
@@ -912,14 +914,25 @@ func TestResolveDir(t *testing.T) {
 func TestLocalState(t *testing.T) {
 	repo := hooktest.GitRepo(t, filepath.Join(hooktest.TempDir(t), "availability"), "", true)
 	head := hooktest.Git(t, repo, "rev-parse", "HEAD")
-	mustContain(t, localState(repo, head), "current HEAD matches")
+	if got := localState(repo, head); got != idLocalHeadMatches {
+		t.Errorf("localState=%q", got)
+	}
 	hooktest.WriteFile(t, filepath.Join(repo, "tracked.txt"), "v2\n")
 	hooktest.Git(t, repo, "commit", "-q", "-am", "c2")
-	out := localState(repo, head)
-	mustContain(t, out, "object is available", "explicit SHA/ref")
-	mustNotContain(t, out, "worktree")
-	mustContain(t, localState(repo, strings.Repeat("f", 40)), "not available", "Git or gh")
-	mustContain(t, localState(repo, nil), "not available")
+	if got := localState(repo, head); got != idLocalAvailable {
+		t.Errorf("localState=%q", got)
+	}
+	for _, language := range []i18n.Language{i18n.English, i18n.Japanese} {
+		for _, id := range []string{idLocalHeadMatches, idLocalAvailable, idLocalMissing, idLocalNoClone} {
+			mustNotContain(t, messages.T(language, id), "worktree")
+		}
+	}
+	if got := localState(repo, strings.Repeat("f", 40)); got != idLocalMissing {
+		t.Errorf("localState=%q", got)
+	}
+	if got := localState(repo, nil); got != idLocalMissing {
+		t.Errorf("localState=%q", got)
+	}
 }
 
 func TestEndToEndWorkspace(t *testing.T) {
@@ -944,31 +957,31 @@ func TestEndToEndWorkspace(t *testing.T) {
 	t.Run("missing head object", func(t *testing.T) {
 		f, workspace, _, _ := setup(t)
 		f.setPR(t, "example/service", 10088, basePR(map[string]any{"headRefName": "feat/x", "headRefOid": strings.Repeat("e", 40)}))
-		mustContain(t, f.run(t, url, workspace, "s1"), "repo=~/workspace/service", "head object is not available")
+		mustContain(t, f.run(t, url, workspace, "s1"), "repo=~/workspace/service", messages.T(hooktest.Language, idLocalMissing))
 	})
 	t.Run("current head matches", func(t *testing.T) {
 		f, workspace, _, head := setup(t)
 		f.setPR(t, "example/service", 10088, basePR(map[string]any{"headRefName": "main", "headRefOid": head}))
-		mustContain(t, f.run(t, url, workspace, "s1"), "current HEAD matches")
+		mustContain(t, f.run(t, url, workspace, "s1"), messages.T(hooktest.Language, idLocalHeadMatches))
 	})
 	t.Run("stale branch of the same name", func(t *testing.T) {
 		f, workspace, repo, _ := setup(t)
 		hooktest.Git(t, repo, "checkout", "-q", "-b", "feat/x")
 		f.setPR(t, "example/service", 10088, basePR(map[string]any{"headRefName": "feat/x", "headRefOid": strings.Repeat("e", 40)}))
 		out := f.run(t, url, workspace, "s1")
-		mustContain(t, out, "head object is not available")
+		mustContain(t, out, messages.T(hooktest.Language, idLocalMissing))
 		mustNotContain(t, out, "worktree")
 	})
 	t.Run("cwd clone", func(t *testing.T) {
 		f, _, _, _ := setup(t)
 		other := hooktest.GitRepo(t, filepath.Join(f.root, "other"), "https://github.com/o/r.git", true)
-		mustContain(t, f.run(t, "https://github.com/o/r/pull/10088", other, "s1"), "repo=", "head object is not available")
+		mustContain(t, f.run(t, "https://github.com/o/r/pull/10088", other, "s1"), "repo=", messages.T(hooktest.Language, idLocalMissing))
 	})
 	t.Run("unrelated cwd", func(t *testing.T) {
 		f, _, _, _ := setup(t)
 		other := hooktest.GitRepo(t, filepath.Join(f.root, "unrelated"), "https://github.com/someone/else.git", true)
 		out := f.run(t, "https://github.com/o/r/pull/10088", other, "s1")
-		mustContain(t, out, "no clone of this repo here")
+		mustContain(t, out, messages.T(hooktest.Language, idLocalNoClone))
 		mustNotContain(t, out, "current HEAD", other)
 	})
 }

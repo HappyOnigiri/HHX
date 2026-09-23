@@ -13,55 +13,49 @@ import (
 	py "github.com/HappyOnigiri/hhx/internal/pycompat"
 )
 
-// 理由文に出るラベル（どのルールが発火したかの判別用）。
-const (
-	labelRevocationAPI = "GitHub Credential Revocation API"
-	labelRevokeHTTP    = "失効 (revoke) エンドポイントへの HTTP リクエスト"
-	labelGHAPIRevoke   = "gh api の失効 (revoke) エンドポイント"
-	labelGHLogout      = "gh auth logout"
-	labelGHSecret      = "GitHub 上の Secret・鍵の削除"
-	labelGHDeployKey   = "GitHub 上の Deploy Key の削除"
-	labelKeychain      = "Keychain の削除"
-	labelGcloudRevoke  = "gcloud の認証失効"
-	labelNPMToken      = "npm token revoke"
-	labelGPGSecret     = "GPG 秘密鍵の削除"
-	labelOPItem        = "1Password アイテムの削除"
-	labelAWSSecret     = "AWS Secrets Manager の即時完全削除"
-
-	labelNPMPublish   = "npm レジストリへの公開・取り下げ"
-	labelYarnPublish  = "npm レジストリへの公開 (yarn)"
-	labelGemPublish   = "RubyGems への公開・取り下げ"
-	labelTwinePublish = "PyPI への公開 (twine upload)"
-	labelCargoPublish = "crates.io への公開・取り下げ"
-
-	labelGHDelete       = "gh の恒久削除 (repo/release/gist)"
-	labelGHAPIDelete    = "gh api の DELETE"
-	labelGcloudDelete   = "gcloud の削除操作"
-	labelAWSDelete      = "aws の削除操作"
-	labelAWSS3          = "aws s3 のオブジェクト・バケット削除"
-	labelTFDestroy      = "terraform destroy"
-	labelTFApplyDestroy = "terraform apply -destroy"
-	labelMysqladmin     = "mysqladmin drop"
-	labelHTTPDelete     = "HTTP クライアントによるクラウド API の DELETE"
-	labelDB             = "データベースの破壊操作"
-
-	labelReflog = "git reflog expire"
-	labelGC     = "git gc --prune=now"
-	labelStash  = "git stash clear"
-
-	labelDiskutil = "diskutil によるディスク消去"
-	labelAPFS     = "diskutil apfs delete*"
-	labelTmutil   = "Time Machine バックアップの削除"
-
-	labelSecretRM       = "秘密ファイルの削除・破壊"
-	labelSecretInPlace  = "秘密ファイルの in-place 書き換え"
-	labelSecretMV       = "秘密ファイルの移動"
-	labelSecretRedirect = "秘密ファイルの上書きリダイレクト"
-	labelSecretTee      = "秘密ファイルへの tee 書き込み"
-	labelSecretEdit     = "秘密ファイルへの直接編集"
-	labelSecretPatch    = "秘密ファイルへのパッチ適用"
-
-	labelGuard = "エージェントガードの削除・移動"
+// 理由文に出るラベル（どのルールが発火したかの判別用）。テストを流す言語でカタログから引く。
+var (
+	labelRevocationAPI  = messages.T(hooktest.Language, idRevocationAPI)
+	labelRevokeHTTP     = messages.T(hooktest.Language, idRevokeHTTP)
+	labelGHAPIRevoke    = messages.T(hooktest.Language, idGHAPIRevoke)
+	labelGHLogout       = messages.T(hooktest.Language, idGHLogout)
+	labelGHSecret       = messages.T(hooktest.Language, idGHSecret)
+	labelGHDeployKey    = messages.T(hooktest.Language, idGHDeployKey)
+	labelKeychain       = messages.T(hooktest.Language, idKeychain)
+	labelGcloudRevoke   = messages.T(hooktest.Language, idGcloudRevoke)
+	labelNPMToken       = messages.T(hooktest.Language, idNPMToken)
+	labelGPGSecret      = messages.T(hooktest.Language, idGPGSecret)
+	labelOPItem         = messages.T(hooktest.Language, idOPItem)
+	labelAWSSecret      = messages.T(hooktest.Language, idAWSSecret)
+	labelNPMPublish     = messages.T(hooktest.Language, idNPMPublish)
+	labelYarnPublish    = messages.T(hooktest.Language, idYarnPublish)
+	labelGemPublish     = messages.T(hooktest.Language, idGemPublish)
+	labelTwinePublish   = messages.T(hooktest.Language, idTwinePublish)
+	labelCargoPublish   = messages.T(hooktest.Language, idCargoPublish)
+	labelGHDelete       = messages.T(hooktest.Language, idGHDelete)
+	labelGHAPIDelete    = messages.T(hooktest.Language, idGHAPIDelete)
+	labelGcloudDelete   = messages.T(hooktest.Language, idGcloudDelete)
+	labelAWSDelete      = messages.T(hooktest.Language, idAWSDelete)
+	labelAWSS3          = messages.T(hooktest.Language, idAWSS3)
+	labelTFDestroy      = messages.T(hooktest.Language, idTFDestroy)
+	labelTFApplyDestroy = messages.T(hooktest.Language, idTFApplyDestroy)
+	labelMysqladmin     = messages.T(hooktest.Language, idMysqladmin)
+	labelHTTPDelete     = messages.T(hooktest.Language, idHTTPDelete)
+	labelDB             = messages.T(hooktest.Language, idDB)
+	labelReflog         = messages.T(hooktest.Language, idReflog)
+	labelGC             = messages.T(hooktest.Language, idGC)
+	labelStash          = messages.T(hooktest.Language, idStash)
+	labelDiskutil       = messages.T(hooktest.Language, idDiskutil)
+	labelAPFS           = messages.T(hooktest.Language, idAPFS)
+	labelTmutil         = messages.T(hooktest.Language, idTmutil)
+	labelSecretRM       = messages.T(hooktest.Language, idSecretRM)
+	labelSecretInPlace  = messages.T(hooktest.Language, idSecretInPlace)
+	labelSecretMV       = messages.T(hooktest.Language, idSecretMV)
+	labelSecretRedirect = messages.T(hooktest.Language, idSecretRedirect)
+	labelSecretTee      = messages.T(hooktest.Language, idSecretTee)
+	labelSecretEdit     = messages.T(hooktest.Language, idSecretEdit)
+	labelSecretPatch    = messages.T(hooktest.Language, idSecretPatch)
+	labelGuard          = messages.T(hooktest.Language, idGuard)
 )
 
 // fakeHome と fakeExecutable は G 類のテストに使う架空のホームディレクトリと hhx の実行ファイルである。
@@ -852,10 +846,8 @@ func TestOutputSchema(t *testing.T) {
 	if got.Decision != hooktest.Deny {
 		t.Fatalf("decision=%q", got.Decision)
 	}
-	for _, part := range []string{"❌ ブロック: gh auth logout\n\n", "理由:", "\n\n対応: 迂回する別コマンド"} {
-		if !strings.Contains(got.Reason, part) {
-			t.Errorf("reason %q does not contain %q", got.Reason, part)
-		}
+	if want := reason(hooktest.Language, target{id: idGHLogout}, idWhyCred); got.Reason != want {
+		t.Errorf("reason=%q, want %q", got.Reason, want)
 	}
 }
 

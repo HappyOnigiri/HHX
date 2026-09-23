@@ -46,6 +46,7 @@ import (
 	"github.com/HappyOnigiri/hhx/internal/hookcache"
 	"github.com/HappyOnigiri/hhx/internal/hookexec"
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 	py "github.com/HappyOnigiri/hhx/internal/pycompat"
 	"github.com/HappyOnigiri/hhx/internal/toolresponse"
 )
@@ -184,7 +185,7 @@ func run(c *hookrt.Context) error {
 			continue
 		}
 		_, localRepo := dirs.resolve(target.ownerRepo, cwd)
-		text, err := formatPR(target.ownerRepo, pull, localRepo)
+		text, err := formatPR(c.Language(), target.ownerRepo, pull, localRepo)
 		if errors.Is(err, errSkip) {
 			continue
 		}
@@ -220,11 +221,12 @@ func run(c *hookrt.Context) error {
 	if len(blocks) == 0 {
 		return nil
 	}
-	notes := note
+	language := c.Language()
+	notes := messages.T(language, idNote)
 	if hasMerged {
-		notes += "\n" + noteMerged
+		notes += "\n" + messages.T(language, idNoteMerged)
 	}
-	c.Print(header + "\n" + notes + "\n" + strings.Join(blocks, "\n") + "\n" + footer + "\n")
+	c.Print(messages.T(language, idHeader) + "\n" + notes + "\n" + strings.Join(blocks, "\n") + "\n" + footer + "\n")
 	return nil
 }
 
@@ -512,16 +514,16 @@ func workspaceRepositories(cwd string) []string {
 	return repositories
 }
 
-// localState は PR の head の object がローカルで使えるかだけを報告する。既存の worktree の利用先は案内しない。
+// localState は PR の head の object がローカルで使えるかだけを報告する（状態の行のカタログの ID を返す）。既存の worktree の利用先は案内しない。
 func localState(localDir string, headOID any) string {
 	oid, isString := headOID.(string)
 	if current := gitOut(localDir, "rev-parse", "HEAD"); current != "" && isString && oid != "" && current == oid {
-		return localHeadMatches
+		return idLocalHeadMatches
 	}
 	if toolresponse.Truthy(headOID) && gitOK(localDir, "cat-file", "-e", toolresponse.PyStr(headOID)+"^{commit}") {
-		return localAvailable
+		return idLocalAvailable
 	}
-	return localMissing
+	return idLocalMissing
 }
 
 // --- 整形 ----------------------------------------------------------------------
@@ -566,7 +568,7 @@ func shorten(path string) string {
 
 // formatPR は PR 1 件分の 3 行を組み立てる。移植元の評価の順に項目を読み、欠けた項目（KeyError）と
 // 型の違い（TypeError）は errSkip、捕まえていない例外は errAbort を返す。
-func formatPR(ownerRepo string, value any, localRepo string) (string, error) {
+func formatPR(language i18n.Language, ownerRepo string, value any, localRepo string) (string, error) {
 	pull, ok := value.(map[string]any)
 	if !ok {
 		return "", errSkip
@@ -592,7 +594,7 @@ func formatPR(ownerRepo string, value any, localRepo string) (string, error) {
 	}
 	// 対応するローカルの clone を確認できないリポジトリでは、パスもローカルの状態も書かない。
 	// 取り違えたパスを出すと、無関係なローカルのファイルを調査してしまう。
-	where, stateLine := "", localNoClone
+	where, stateLine := "", idLocalNoClone
 	if localRepo != "" {
 		if _, err := field("headRefName"); err != nil {
 			return "", err
@@ -647,7 +649,7 @@ func formatPR(ownerRepo string, value any, localRepo string) (string, error) {
 	return ownerRepo + "#" + values[0] + " " + label + " \"" + values[1] + "\"\n" +
 		"  head=" + values[2] + "@" + values[3] + " base=" + values[4] + merged +
 		" +" + counts[0] + "-" + counts[1] + " " + counts[2] + "f" + where + "\n" +
-		stateLine, nil
+		messages.T(language, stateLine), nil
 }
 
 // stateLabel は PR の状態の表記（OPEN・DRAFT・CONFLICT・MERGED(into ...) など）を組み立てる。

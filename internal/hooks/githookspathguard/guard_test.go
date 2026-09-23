@@ -177,10 +177,8 @@ func TestFileToolBlocksRepositoryConfigPaths(t *testing.T) {
 // 回避を思いとどまらせるのは理由文だけなので、迂回せずユーザーに伝えるよう促す（README の Limits）。
 func TestReasonAsksToReportInsteadOfWorkingAround(t *testing.T) {
 	got := runRaw(t, fileToolPayload("Edit", "/tmp/repo/.git/config"))
-	for _, part := range []string{"迂回する別コマンド・別ツールを試さず", "ユーザーに伝えて指示を仰いで"} {
-		if !strings.Contains(got.Reason, part) {
-			t.Errorf("reason %q does not contain %q", got.Reason, part)
-		}
+	if want := messages.T(hooktest.Language, idReason); got.Reason != want {
+		t.Errorf("reason=%q, want %q", got.Reason, want)
 	}
 }
 
@@ -349,7 +347,7 @@ func TestOutputSchema(t *testing.T) {
 	if got.Decision != hooktest.Deny {
 		t.Fatalf("%+v", got)
 	}
-	for _, part := range []string{".git/hooks/", "git config <key> <value>", "禁止"} {
+	for _, part := range []string{".git/hooks/", "git config <key> <value>", "hooksPath"} {
 		if !strings.Contains(got.Reason, part) {
 			t.Errorf("reason %q does not contain %q", got.Reason, part)
 		}

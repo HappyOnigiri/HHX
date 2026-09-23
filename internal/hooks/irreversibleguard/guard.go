@@ -97,11 +97,11 @@ func run(c *hookrt.Context) error {
 	case "Edit", "Write", "MultiEdit", "NotebookEdit":
 		path := firstTruthy(toolInput["file_path"], toolInput["notebook_path"])
 		if label := secretPathLabel(path); label != "" {
-			c.Deny(reason(withToken(targetSecretEdit, label), whySecret))
+			c.Deny(reason(c.Language(), target{idSecretEdit, label}, idWhySecret))
 		}
 	case "apply_patch":
 		if label := patchedSecretLabel(payload["tool_input"]); label != "" {
-			c.Deny(reason(withToken(targetSecretPatch, label), whySecret))
+			c.Deny(reason(c.Language(), target{idSecretPatch, label}, idWhySecret))
 		}
 	default:
 		// 文字列でない command は判定しない（移植元の isinstance の検査）。
@@ -127,8 +127,8 @@ func decodeMap(raw json.RawMessage) (map[string]any, bool) {
 
 // evaluate は Bash のコマンド文字列を判定し、拒否するなら出力する。
 func evaluate(c *hookrt.Context, command string) {
-	if target, why := analyzeCommand(command); target != "" {
-		c.Deny(reason(target, why))
+	if found, why := analyzeCommand(command); found.id != "" {
+		c.Deny(reason(c.Language(), found, why))
 	}
 }
 
@@ -186,7 +186,8 @@ const (
 	dashOptions = `(?:-` + py.NotSpace + `+` + sp + `+)*`
 )
 
-// rule は 1 つの規則である。pattern が正規化したコマンドのどこかに一致すれば、target を表記にして拒否する。
+// rule は 1 つの規則である。pattern が正規化したコマンドのどこかに一致すれば、target の表記で拒否する。
+// target と why はカタログの ID である。
 type rule struct {
 	pattern *regexp.Regexp
 	target  string
@@ -200,52 +201,52 @@ func newRule(pattern, target, why string) rule {
 // commandRules は A・C・D・E 類の規則である。移植元の COMMAND_RULES と同じ順に並べる。
 var commandRules = []rule{
 	// --- A. 資格情報の失効・削除 ---
-	newRule(httpClient+seg+`credentials/revoke`, "GitHub Credential Revocation API", whyCred),
+	newRule(httpClient+seg+`credentials/revoke`, idRevocationAPI, idWhyCred),
 	newRule(httpClient+seg+`https?://[^`+py.SpaceChars+`|;&]*revoke`,
-		"失効 (revoke) エンドポイントへの HTTP リクエスト", whyCred),
-	newRule(ghCommand+`api`+seg+`revoke`, "gh api の失効 (revoke) エンドポイント", whyCred),
-	newRule(ghCommand+`auth`+sp+`+logout`+wordEnd, "gh auth logout", whyCred),
+		idRevokeHTTP, idWhyCred),
+	newRule(ghCommand+`api`+seg+`revoke`, idGHAPIRevoke, idWhyCred),
+	newRule(ghCommand+`auth`+sp+`+logout`+wordEnd, idGHLogout, idWhyCred),
 	newRule(ghCommand+`(?:secret|variable|ssh-key|gpg-key)`+sp+`+delete`+wordEnd,
-		"GitHub 上の Secret・鍵の削除 (値は読み返せない)", whyCred),
-	newRule(ghCommand+`repo`+sp+`+deploy-key`+sp+`+delete`+wordEnd, "GitHub 上の Deploy Key の削除", whyCred),
+		idGHSecret, idWhyCred),
+	newRule(ghCommand+`repo`+sp+`+deploy-key`+sp+`+delete`+wordEnd, idGHDeployKey, idWhyCred),
 	newRule(boundary+pathPrefix+`security`+sp+`+`+dashOptions+`delete-`+py.Word,
-		"Keychain の削除 (security delete-*)", whyCred),
-	newRule(boundary+pathPrefix+`gcloud`+sp+segWord+`revoke`+wordEnd, "gcloud の認証失効", whyCred),
-	newRule(boundary+`npm`+sp+`+token`+sp+`+revoke`+wordEnd, "npm token revoke", whyCred),
-	newRule(boundary+`gpg2?`+sp+seg+`--delete-secret-key`, "GPG 秘密鍵の削除", whyCred),
-	newRule(boundary+`op`+sp+`+item`+sp+`+delete`+wordEnd, "1Password アイテムの削除", whyCred),
-	newRule(`--force-delete-without-recovery`, "AWS Secrets Manager の即時完全削除", whyCred),
+		idKeychain, idWhyCred),
+	newRule(boundary+pathPrefix+`gcloud`+sp+segWord+`revoke`+wordEnd, idGcloudRevoke, idWhyCred),
+	newRule(boundary+`npm`+sp+`+token`+sp+`+revoke`+wordEnd, idNPMToken, idWhyCred),
+	newRule(boundary+`gpg2?`+sp+seg+`--delete-secret-key`, idGPGSecret, idWhyCred),
+	newRule(boundary+`op`+sp+`+item`+sp+`+delete`+wordEnd, idOPItem, idWhyCred),
+	newRule(`--force-delete-without-recovery`, idAWSSecret, idWhyCred),
 	// --- C. リモートリソースの恒久削除 ---
-	newRule(ghCommand+`(?:repo|release|gist)`+sp+`+delete`+wordEnd, "gh の恒久削除 (repo/release/gist)", whyRemote),
-	newRule(ghCommand+`api`+seg+`-X`+sp+`+(?i:DELETE)`+wordEnd, "gh api の DELETE", whyRemote),
-	newRule(boundary+pathPrefix+`gcloud`+sp+segWord+`delete`+wordEnd, "gcloud の削除操作", whyRemote),
-	newRule(boundary+pathPrefix+`aws`+sp+segWord+`delete-`+py.Word, "aws の削除操作 (delete-*)", whyRemote),
-	newRule(boundary+pathPrefix+`aws`+sp+`+s3`+sp+`+(?:rb|rm)`+wordEnd, "aws s3 のオブジェクト・バケット削除", whyRemote),
-	newRule(boundary+pathPrefix+`(?:terraform|tofu)`+sp+`+`+dashOptions+`destroy`+wordEnd, "terraform destroy", whyRemote),
+	newRule(ghCommand+`(?:repo|release|gist)`+sp+`+delete`+wordEnd, idGHDelete, idWhyRemote),
+	newRule(ghCommand+`api`+seg+`-X`+sp+`+(?i:DELETE)`+wordEnd, idGHAPIDelete, idWhyRemote),
+	newRule(boundary+pathPrefix+`gcloud`+sp+segWord+`delete`+wordEnd, idGcloudDelete, idWhyRemote),
+	newRule(boundary+pathPrefix+`aws`+sp+segWord+`delete-`+py.Word, idAWSDelete, idWhyRemote),
+	newRule(boundary+pathPrefix+`aws`+sp+`+s3`+sp+`+(?:rb|rm)`+wordEnd, idAWSS3, idWhyRemote),
+	newRule(boundary+pathPrefix+`(?:terraform|tofu)`+sp+`+`+dashOptions+`destroy`+wordEnd, idTFDestroy, idWhyRemote),
 	newRule(boundary+pathPrefix+`(?:terraform|tofu)`+sp+`+`+dashOptions+`apply`+sp+seg+`-destroy`+wordEnd,
-		"terraform apply -destroy", whyRemote),
-	newRule(boundary+pathPrefix+`mysqladmin`+sp+segWord+`drop`+wordEnd, "mysqladmin drop", whyRemote),
+		idTFApplyDestroy, idWhyRemote),
+	newRule(boundary+pathPrefix+`mysqladmin`+sp+segWord+`drop`+wordEnd, idMysqladmin, idWhyRemote),
 	// --- D. Git オブジェクトの物理破壊 ---
-	newRule(gitCommand+segWord+`reflog`+sp+`+expire`+wordEnd, "git reflog expire", whyGit),
+	newRule(gitCommand+segWord+`reflog`+sp+`+expire`+wordEnd, idReflog, idWhyGit),
 	// `\bgc\b{SEG}--prune`: gc の直後の \b は、SEG が空なら次の - で、空でなければ SEG の先頭の文字で成り立つ。
 	newRule(gitCommand+segWord+`gc(?:[^|;&`+py.WordChars+`]`+seg+`)?--prune=(?:now|all)`+wordEnd,
-		"git gc --prune=now", whyGit),
-	newRule(gitCommand+segWord+`stash`+sp+`+clear`+wordEnd, "git stash clear", whyGit),
+		idGC, idWhyGit),
+	newRule(gitCommand+segWord+`stash`+sp+`+clear`+wordEnd, idStash, idWhyGit),
 	// --- E. マシン上の不可逆消去 ---
 	newRule(boundary+pathPrefix+`diskutil`+sp+segWord+`(?:erase`+py.Word+`*|partitionDisk|zeroDisk|reformat)`+wordEnd,
-		"diskutil によるディスク消去", whyMachine),
-	newRule(boundary+pathPrefix+`diskutil`+sp+`+apfs`+sp+`+delete`+py.Word+`*`, "diskutil apfs delete*", whyMachine),
-	newRule(boundary+pathPrefix+`tmutil`+sp+`+delete`+wordEnd, "Time Machine バックアップの削除", whyMachine),
+		idDiskutil, idWhyMachine),
+	newRule(boundary+pathPrefix+`diskutil`+sp+`+apfs`+sp+`+delete`+py.Word+`*`, idAPFS, idWhyMachine),
+	newRule(boundary+pathPrefix+`tmutil`+sp+`+delete`+wordEnd, idTmutil, idWhyMachine),
 }
 
 // publishRules は B 類（--dry-run が付いていれば許可する公開系）の規則である。
 var publishRules = []rule{
 	newRule(boundary+pathPrefix+`(?:npm|pnpm)`+sp+`+(?:publish|unpublish|deprecate)`+wordEnd,
-		"npm レジストリへの公開・取り下げ", whyPublish),
-	newRule(boundary+pathPrefix+`yarn`+sp+`+(?:npm`+sp+`+)?publish`+wordEnd, "npm レジストリへの公開 (yarn)", whyPublish),
-	newRule(boundary+pathPrefix+`gem`+sp+`+(?:push|yank)`+wordEnd, "RubyGems への公開・取り下げ", whyPublish),
-	newRule(boundary+`twine`+sp+`+upload`+wordEnd, "PyPI への公開 (twine upload)", whyPublish),
-	newRule(boundary+pathPrefix+`cargo`+sp+`+(?:publish|yank)`+wordEnd, "crates.io への公開・取り下げ", whyPublish),
+		idNPMPublish, idWhyPublish),
+	newRule(boundary+pathPrefix+`yarn`+sp+`+(?:npm`+sp+`+)?publish`+wordEnd, idYarnPublish, idWhyPublish),
+	newRule(boundary+pathPrefix+`gem`+sp+`+(?:push|yank)`+wordEnd, idGemPublish, idWhyPublish),
+	newRule(boundary+`twine`+sp+`+upload`+wordEnd, idTwinePublish, idWhyPublish),
+	newRule(boundary+pathPrefix+`cargo`+sp+`+(?:publish|yank)`+wordEnd, idCargoPublish, idWhyPublish),
 }
 
 var (
@@ -275,42 +276,42 @@ func normalize(command string) string {
 }
 
 // analyzeCommand は Bash のコマンド文字列を判定し、拒否するなら対象の表記と理由を、通すなら空文字列を返す。
-func analyzeCommand(command string) (target, why string) {
+func analyzeCommand(command string) (found target, why string) {
 	if command == "" {
-		return "", ""
+		return target{}, ""
 	}
 	if !secondGateWords.MatchString(command) && !secondGatePaths.MatchString(command) {
-		return "", ""
+		return target{}, ""
 	}
 	normalized := normalize(command)
 	for _, rule := range commandRules {
 		if rule.pattern.MatchString(normalized) {
-			return rule.target, rule.why
+			return target{id: rule.target}, rule.why
 		}
 	}
 	if !strings.Contains(normalized, "--dry-run") {
 		for _, rule := range publishRules {
 			if rule.pattern.MatchString(normalized) {
-				return rule.target, rule.why
+				return target{id: rule.target}, rule.why
 			}
 		}
 	}
 	// HTTP クライアントによるクラウド API の DELETE（URL と -X の順序は問わない）。
 	if httpClientRE.MatchString(normalized) && deleteMethodRE.MatchString(normalized) &&
 		cloudHostRE.MatchString(normalized) {
-		return targetHTTPDelete, whyRemote
+		return target{id: idHTTPDelete}, idWhyRemote
 	}
 	// DB クライアント経由の破壊 SQL（SQL ファイル内の文字列だけでは発火しない）。
 	if dbClientRE.MatchString(normalized) && destructiveSQL.MatchString(normalized) {
-		return targetDB, whyRemote
+		return target{id: idDB}, idWhyRemote
 	}
-	if target := checkSecretFiles(normalized); target != "" {
-		return target, whySecret
+	if found := checkSecretFiles(normalized); found.id != "" {
+		return found, idWhySecret
 	}
-	if target := checkGuardFiles(normalized); target != "" {
-		return target, whyGuard
+	if found := checkGuardFiles(normalized); found.id != "" {
+		return found, idWhyGuard
 	}
-	return "", ""
+	return target{}, ""
 }
 
 // segments は `re.split(r"[|;&]", ...)` と同じく、パイプとコマンド区切りで分ける。
@@ -326,7 +327,7 @@ var (
 
 // checkSecretFiles は秘密ファイルへの破壊的な操作（削除・移動・in-place 書き換え・上書きリダイレクト・tee）を探し、
 // 見つかれば対象の表記を返す。
-func checkSecretFiles(normalized string) string {
+func checkSecretFiles(normalized string) target {
 	for _, segment := range segments(normalized) {
 		scanner := newSecretScanner(segment)
 		tokens := scanner.tokens()
@@ -336,18 +337,18 @@ func checkSecretFiles(normalized string) string {
 		shown := tokens[0]
 		switch {
 		case deleteVerbRE.MatchString(segment):
-			return withToken(targetSecretDelete, shown)
+			return target{idSecretRM, shown}
 		case inPlaceToolRE.MatchString(segment) && inPlaceFlagRE.MatchString(segment):
-			return withToken(targetSecretInPlace, shown)
+			return target{idSecretInPlace, shown}
 		case scanner.movesSecret():
-			return withToken(targetSecretMove, shown)
+			return target{idSecretMV, shown}
 		case scanner.redirectsToSecret():
-			return withToken(targetSecretRedirect, shown)
+			return target{idSecretRedirect, shown}
 		case scanner.teesToSecret():
-			return withToken(targetSecretTee, shown)
+			return target{idSecretTee, shown}
 		}
 	}
-	return ""
+	return target{}
 }
 
 // secretPathLabel は Edit / Write / apply_patch の対象のパスが秘密ファイルなら表示名を、違えば空文字列を返す。
@@ -560,7 +561,7 @@ func guardPattern() *regexp.Regexp {
 
 // checkGuardFiles はガード（hhx・hook の登録）の削除・移動を探し、見つかれば対象の表記を返す。
 // 編集とキャッシュの掃除は対象外である。
-func checkGuardFiles(normalized string) string {
+func checkGuardFiles(normalized string) target {
 	var pattern *regexp.Regexp
 	for _, segment := range segments(normalized) {
 		if !moveVerbRE.MatchString(segment) {
@@ -583,12 +584,12 @@ func checkGuardFiles(normalized string) string {
 			}
 			token := padded[position+start : position+end]
 			if !containsAny(token, guardSkip) {
-				return withToken(targetGuard, token)
+				return target{idGuard, token}
 			}
 			position += end
 		}
 	}
-	return ""
+	return target{}
 }
 
 func containsAny(text string, words []string) bool {

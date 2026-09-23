@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -250,10 +251,8 @@ func TestInvalidRegexpDenies(t *testing.T) {
 		t.Fatalf("invalid pattern must deny: %+v", got)
 	}
 	termsPath := filepath.Join(repo, ".git", termsFileName)
-	for _, part := range []string{"❌ ブロック: 禁止語を検査できない本文の送信", "(語リスト: " + termsPath + " の 2 行目)", "対応: " + invalidHow} {
-		if !strings.Contains(got.Reason, part) {
-			t.Errorf("reason %q does not contain %q", got.Reason, part)
-		}
+	if want := invalidReason(hooktest.Language, []int{2}, termsPath); got.Reason != want {
+		t.Errorf("reason=%q, want %q", got.Reason, want)
 	}
 	// 対象外のコマンドは語リストを読まない。
 	if got := runIn(t, repo, `git commit -m "clean"`); got.Decision != "" {
@@ -273,14 +272,16 @@ func TestReasonFormat(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	termsPath := filepath.Join(repo, ".git", termsFileName)
-	for _, part := range []string{
-		"❌ ブロック: 禁止語を含む本文の送信\n\n該当箇所:\n  command:1: gh pr create --body '" + term + "\n  command:2: " + term + "\n",
-		"  command:10: " + term + "\n  … 他 3 件\n\n",
-		"理由: " + why + " (語リスト: " + termsPath + ")\n\n対応: " + how,
-	} {
-		if !strings.Contains(got.Reason, part) {
-			t.Errorf("reason %q does not contain %q", got.Reason, part)
-		}
+	// 該当箇所は 10 件まで並べ、残りの 3 件は件数だけを出す。
+	findings := []string{"  command:1: gh pr create --body '" + term}
+	for index := 2; index <= 13; index++ {
+		findings = append(findings, "  command:"+strconv.Itoa(index)+": "+term)
+	}
+	if want := reason(hooktest.Language, findings, termsPath); got.Reason != want {
+		t.Errorf("reason=%q, want %q", got.Reason, want)
+	}
+	if !strings.Contains(got.Reason, "  command:10: "+term+"\n"+messages.Text(hooktest.Language, idMore, map[string]any{"Count": 3})) {
+		t.Errorf("reason %q must list 10 findings and count the rest", got.Reason)
 	}
 	if clipped := clip(strings.Repeat("あ", 250)); clipped != strings.Repeat("あ", 200)+" …" {
 		t.Errorf("clip: %q", clipped)

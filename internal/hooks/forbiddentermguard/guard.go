@@ -76,7 +76,7 @@ func run(c *hookrt.Context) error {
 	terms, invalid := loadTerms(termsPath)
 	if len(invalid) > 0 {
 		// 検査できない語があるまま送ると、その語が公開先へ出てしまう。
-		c.Deny(invalidReason(invalid, termsPath))
+		c.Deny(invalidReason(c.Language(), invalid, termsPath))
 		return nil
 	}
 	if len(terms) == 0 {
@@ -95,7 +95,7 @@ func run(c *hookrt.Context) error {
 		findings = scan(strings.ToValidUTF8(string(data), "�"), terms, file.shown, findings)
 	}
 	if len(findings) > 0 {
-		c.Deny(reason(findings, termsPath))
+		c.Deny(reason(c.Language(), findings, termsPath))
 	}
 	return nil
 }

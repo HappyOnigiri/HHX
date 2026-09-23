@@ -294,9 +294,11 @@ func TestBlockedReasonFormatAndOrder(t *testing.T) {
 		launchPair("toolu_3", "xxx333xxx333", "a-first"),
 		launchPair("toolu_4", "www444www444", "b-second"),
 	)...)
-	want := reasonHead + "\n\n未完了のエージェント:\n" +
-		"- yyy222yyy222\n- xxx333xxx333 (a-first)\n- zzz111zzz111 (b-second)\n- www444www444 (b-second)" +
-		"\n\n" + reasonTail
+	want := messages.Text(hooktest.Language, idReason, map[string]any{
+		"Head":   messages.T(hooktest.Language, idHead),
+		"Agents": "- yyy222yyy222\n- xxx333xxx333 (a-first)\n- zzz111zzz111 (b-second)\n- www444www444 (b-second)",
+		"Tail":   messages.T(hooktest.Language, idTail),
+	})
 	if got.Reason != want {
 		t.Errorf("reason:\n%s\nwant:\n%s", got.Reason, want)
 	}
