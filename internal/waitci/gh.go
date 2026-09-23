@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 	"github.com/HappyOnigiri/hhx/internal/pycompat"
 )
 
@@ -92,6 +93,8 @@ func pythonList(values []string) string {
 // GH は gh を外部コマンドとして呼ぶ。認証と {owner}/{repo} の解決は gh に任せる。
 type GH struct {
 	Runner Runner
+	// Language はエラーの文面の表示言語である。零値は英語になる。
+	Language i18n.Language
 	// Timeout は 1 回の呼び出しの上限である。0 なら GHTimeout。
 	Timeout time.Duration
 }
@@ -139,10 +142,11 @@ func (g GH) capture(args []string) (string, error) {
 	return pycompat.Strip(result.Stdout), nil
 }
 
-func asCount(text string) (int, error) {
+func asCount(language i18n.Language, text string) (int, error) {
 	// Python の str.isdigit と int。gh の --jq の出力は ASCII の数字なので ASCII に限る。
 	if text == "" || strings.Trim(text, "0123456789") != "" {
-		return 0, &FetchError{Message: "gh の出力を件数として読めない: " + pythonRepr(text), Retryable: true}
+		message := messages.Text(language, idCountUnread, map[string]any{"Output": pythonRepr(text)})
+		return 0, &FetchError{Message: message, Retryable: true}
 	}
 	count, err := strconv.Atoi(text)
 	if err != nil {
@@ -164,7 +168,7 @@ func (g GH) CIEvidence() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	workflows, err := asCount(output)
+	workflows, err := asCount(g.Language, output)
 	if err != nil {
 		return false, err
 	}
@@ -179,7 +183,7 @@ func (g GH) CIEvidence() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	checks, err := asCount(output)
+	checks, err := asCount(g.Language, output)
 	if err != nil {
 		return false, err
 	}
@@ -202,12 +206,13 @@ func (g GH) Fetch(reference string) (Snapshot, error) {
 	}
 	var payload any
 	if err := json.Unmarshal([]byte(result.Stdout), &payload); err != nil {
-		return Snapshot{}, &FetchError{Message: "gh の出力を JSON として読めない: " + err.Error(), Retryable: true}
+		message := messages.Text(g.Language, idJSONUnread, map[string]any{"Error": err.Error()})
+		return Snapshot{}, &FetchError{Message: message, Retryable: true}
 	}
 	object, ok := payload.(map[string]any)
 	if !ok {
 		// Python 実装は AttributeError で落ちる。読めない出力として再試行する。
-		return Snapshot{}, &FetchError{Message: "gh の出力を JSON として読めない: オブジェクトでない", Retryable: true}
+		return Snapshot{}, &FetchError{Message: messages.T(g.Language, idJSONNotObject), Retryable: true}
 	}
 	// 配列でない rollup は、Python では要素がオブジェクトでないので読み飛ばされ、0 件になる。
 	rollup, _ := object["statusCheckRollup"].([]any)
@@ -221,7 +226,7 @@ func (g GH) Fetch(reference string) (Snapshot, error) {
 // FindPRBySHA は commit を含む open PR の番号を返す。
 func (g GH) FindPRBySHA(sha string) (string, error) {
 	if sha == "" {
-		return "", &FetchError{Message: "detached HEAD の commit SHA を取得できない", Retryable: false}
+		return "", &FetchError{Message: messages.T(g.Language, idNoDetachedHead), Retryable: false}
 	}
 	result, err := g.run([]string{
 		"pr", "list", "--search", sha, "--state", "open", "--json", "number", "--jq", ".[].number", "--limit", "1",
@@ -234,7 +239,7 @@ func (g GH) FindPRBySHA(sha string) (string, error) {
 	}
 	number := pycompat.Strip(result.Stdout)
 	if number == "" {
-		return "", &NoPullRequestError{Message: fmt.Sprintf("commit %s に open PR が無い", sha)}
+		return "", &NoPullRequestError{Message: messages.Text(g.Language, idNoPR, map[string]any{"SHA": sha})}
 	}
 	return number, nil
 }

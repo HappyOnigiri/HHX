@@ -25,7 +25,7 @@ CI_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 CI_MAKEFLAGS := -j$(CI_JOBS) --keep-going $(if $(filter output-sync,$(.FEATURES)),--output-sync=target)
 
 .PHONY: build install fmt lint go-lint go-deadcode mod-tidy-check markdown-lint reporter-check test test-race-coverage \
-	version-check release release-check install-test uninstall-test ci ci-checks $(GOLANGCI_LINT)
+	version-check release release-check install-test uninstall-test test-ja ci ci-checks $(GOLANGCI_LINT)
 
 build:
 	mkdir -p bin
@@ -67,6 +67,10 @@ reporter-check:
 
 test:
 	$(GO) test -shuffle=on -count=1 ./...
+
+# 同じテストを日本語の表示（language: ja）でも流す。判定は言語で変わらず、文面はカタログどおりであることを確かめる。
+test-ja:
+	HHX_TEST_LANGUAGE=ja $(GO) test -shuffle=on -count=1 ./...
 
 # race 有効の 1 回の実行で、テストの成否とカバレッジの閾値の両方を確かめる。
 test-race-coverage:
@@ -122,4 +126,4 @@ ci:
 	$(MAKE) $(CI_MAKEFLAGS) ci-checks
 
 # どのチェックも読み取り専用か、自分の出力先（bin/ と一時ディレクトリ）にしか書かないので、並行して実行できる。
-ci-checks: version-check release-check install-test uninstall-test lint reporter-check test-race-coverage mod-tidy-check
+ci-checks: version-check release-check install-test uninstall-test lint reporter-check test-race-coverage test-ja mod-tidy-check

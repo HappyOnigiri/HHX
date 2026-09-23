@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -61,9 +62,10 @@ var updateCommand = defaultUpdateAdapters()
 // runUpdate は新しいリリースの有無を確かめ、--apply ならそのタグの install.sh で更新する。
 // hook の実行中にネットワークへ出ないよう、確認はこのコマンドを明示的に実行したときだけ行う。
 func runUpdate(args []string, stdout, stderr io.Writer) int {
+	language := displayLanguage()
 	flags := pflag.NewFlagSet("update", pflag.ContinueOnError)
 	flags.SetOutput(stderr)
-	apply := flags.Bool("apply", false, "install the latest release")
+	apply := flags.Bool("apply", false, messages.T(language, idApplyFlag))
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, pflag.ErrHelp) {
 			return 0
@@ -71,21 +73,23 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if flags.NArg() > 0 {
-		_, _ = fmt.Fprintf(stderr, "hhx update: unexpected argument %q\n", flags.Arg(0))
+		_, _ = fmt.Fprintln(stderr, messages.Text(language, idUnexpectedArgument, map[string]any{
+			"Command": "update", "Argument": strconv.Quote(flags.Arg(0)),
+		}))
 		return 2
 	}
 	adapters := updateCommand
 	current := adapters.current()
 	// 開発ビルドは版が vX.Y.Z ではなく比較できず、install.sh の置き換え先とも一致するとは限らない。
 	if !adapters.releaseBuild() {
-		_, _ = fmt.Fprintf(stdout, "hhx %s is a development build; update works only for release builds\n", current)
+		_, _ = fmt.Fprintln(stdout, messages.Text(language, idDevelopment, map[string]any{"Version": current}))
 		return 0
 	}
 	checkContext, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
 	defer cancel()
 	release, err := adapters.latest(checkContext)
 	if errors.Is(err, update.ErrUnavailable) {
-		_, _ = fmt.Fprintf(stdout, "hhx %s: %v\n", current, err)
+		_, _ = fmt.Fprintln(stdout, messages.Text(language, idNoReleaseYet, map[string]any{"Version": current}))
 		return 0
 	}
 	if err != nil {
@@ -93,19 +97,21 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if !update.Newer(current, release.Tag) {
-		_, _ = fmt.Fprintf(stdout, "hhx %s is up to date\n", current)
+		_, _ = fmt.Fprintln(stdout, messages.Text(language, idUpToDate, map[string]any{"Version": current}))
 		return 0
 	}
 	if !*apply {
-		_, _ = fmt.Fprintf(stdout, "hhx %s is available (current: %s)\n%s\nRun hhx update --apply to install it.\n",
-			release.Tag, current, release.URL)
+		_, _ = fmt.Fprint(stdout, messages.Text(language, idAvailable, map[string]any{
+			"Latest": release.Tag, "Version": current, "URL": release.URL,
+		}))
 		return 0
 	}
 	if !adapters.supported() {
-		_, _ = fmt.Fprintln(stderr, "hhx update: the release installer supports only macOS arm64")
+		_, _ = fmt.Fprintln(stderr, messages.T(language, idUnsupported))
 		return 1
 	}
-	_, _ = fmt.Fprintf(stdout, "Updating hhx %s to %s...\n", current, release.Tag)
+	updating := messages.Text(language, idUpdating, map[string]any{"Version": current, "Latest": release.Tag})
+	_, _ = fmt.Fprintln(stdout, updating)
 	applied, err := adapters.apply(context.Background(), release.Tag, stdout)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "hhx update: %v\n", err)
@@ -114,9 +120,8 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 	// hook の登録には install 時に PATH で解決した絶対パスが入っている。
 	// 別の場所の hhx を使っていると、置き換えた先は hook から呼ばれない。
 	if resolved := adapters.onPath(); resolved != "" && resolved != realPath(applied.Path) {
-		_, _ = fmt.Fprintf(stdout, "Note: hhx on PATH is %s, not the updated %s.\n"+
-			"Hooks registered with %s keep running the old version.\n",
-			resolved, applied.Path, resolved)
+		note := messages.Text(language, idOtherOnPath, map[string]any{"OnPath": resolved, "Path": applied.Path})
+		_, _ = fmt.Fprint(stdout, note)
 	}
 	return 0
 }

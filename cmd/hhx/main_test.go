@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 	"github.com/HappyOnigiri/hhx/internal/registry"
 )
 
@@ -244,11 +245,11 @@ func TestValidateConfigReportsHookSettingTypes(t *testing.T) {
 		Limit int `yaml:"limit"`
 	}
 	definitions := []hookrt.Definition{{Name: "limited", NewSettings: func() any { return &settings{} }}}
-	if err := validateConfig(definitions); err == nil || !strings.Contains(err.Error(), "hooks.limited") {
+	if err := validateConfig(i18n.English, definitions); err == nil || !strings.Contains(err.Error(), "hooks.limited") {
 		t.Fatalf("validateConfig()=%v, want an error for hooks.limited", err)
 	}
 	definitions[0].NewSettings = nil
-	if err := validateConfig(definitions); err != nil {
+	if err := validateConfig(i18n.English, definitions); err != nil {
 		t.Fatalf("hook without settings: validateConfig()=%v", err)
 	}
 }
