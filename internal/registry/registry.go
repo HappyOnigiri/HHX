@@ -4,6 +4,7 @@ package registry
 
 import (
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	"github.com/HappyOnigiri/hhx/internal/hooks/agentslocalcontext"
 	"github.com/HappyOnigiri/hhx/internal/hooks/dangerousrmguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/discardguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/exitplansubagentguard"
@@ -11,13 +12,18 @@ import (
 	"github.com/HappyOnigiri/hhx/internal/hooks/githookspathguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/idlewaitguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/irreversibleguard"
+	"github.com/HappyOnigiri/hhx/internal/hooks/prbodystaleness"
+	"github.com/HappyOnigiri/hhx/internal/hooks/prcontext"
 	"github.com/HappyOnigiri/hhx/internal/hooks/prmergeguard"
+	"github.com/HappyOnigiri/hhx/internal/hooks/pushcicontext"
 )
 
 // definitions は hook を設定ファイルへ書く順に並べる。
 // 同じ CLI・イベント・matcher のエントリは 1 つのグループにまとまり、グループ内の順序もこの順になる。
 // 移行元の Python 実装を登録していた順に合わせ、移植した hook はその位置へ差し込む。
+// agents-local-context は、移植元の Codex の PreToolUse で Bash のグループより前（matcher なし）に登録していた。
 var definitions = []hookrt.Definition{
+	agentslocalcontext.Definition(),
 	prmergeguard.Definition(),
 	discardguard.Definition(),
 	githookspathguard.Definition(),
@@ -26,6 +32,9 @@ var definitions = []hookrt.Definition{
 	forbiddentermguard.Definition(),
 	idlewaitguard.Definition(),
 	exitplansubagentguard.Definition(),
+	pushcicontext.Definition(),
+	prbodystaleness.Definition(),
+	prcontext.Definition(),
 }
 
 // All は登録済みの hook をすべて返す。
