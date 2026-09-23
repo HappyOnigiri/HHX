@@ -60,6 +60,10 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
   - `guard_test.go`
 - `internal/registry` の一覧へ、移植元の登録順の位置に足す。Makefile の `GO_COVERAGE_PACKAGES` にも足す。
 - 判定は Python の意味を 1 対 1 で移す。書き直して「より正しく」しない。気付いた穴は README の Limits に書くか、別の作業に回す。
+  - 例外として、移植元のままではデータを失う穴（discard-guard が別のリポジトリを保存して通すなど）は、1 対 1 よりデータを守ることを優先して直す。
+    hhx に切り替えた後は Python 実装は動かないので、移植元に合わせて残す理由が無い。
+    直した点はコードのコメントに移植元との違いとして書き、`compat/test_differential.py` では該当する入力を比較から外して、外す理由を書く。
+    今ある例は discard-guard の 2 点（`( ... )` の中の cd を閉じ括弧で取り消す、1 つの git の複数の `-C` を順に適用する）。
   - 一次ゲートのキーワードは変えない。「ゲートで抜ける＝判定しない」こともテストで固定されている。
     開錠の環境変数のように stdin の中身を見ずに抜ける条件も `Gate` に置く。
   - argv のデバッグ経路（`Context.FromArgs`）での引数の解釈は、移植元の hook ごとの扱いに合わせる。

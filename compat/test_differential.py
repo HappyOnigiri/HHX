@@ -394,6 +394,40 @@ DISCARD_FRAGMENTS = (
 DISCARD_CHANGED_REASON = ("実行せず文字列として書きたいだけなら Write / Edit ツールを使ってください。",
                           "実行せず文字列として書きたいだけなら、ファイルを編集するツールを使ってください。")
 
+# hhx で意図して Python 実装から変えた、snapshot の対象の特定。どちらも Python 実装は別のリポジトリを保存して通し、
+# 本来の対象の変更を失う (データ消失) ので、1 対 1 よりデータを守ることを優先して直した (AGENTS.md の「hook の移植の型」)。
+#   - ( ... ) / $( ... ) の中の cd を閉じ括弧で取り消す。Python は括弧を空白として読み、閉じた後も cd を残す。
+#   - 1 つの git の複数の -C を順に適用する。Python は最後の -C だけを cwd から解決する。
+# これに当たりうる入力 (cd の後に閉じ括弧がある、-C で始まるトークンが 2 つ以上ある) は判定が違ってよいので比べない。
+# 実際の判定は Go のテスト (TestResolveCdInsideSubshellDoesNotLeak・TestResolveMultipleDashCAreApplied など) で固定している。
+# 条件は広めにとり、違いうる入力を取りこぼさないことを優先する。
+DISCARD_SUBSHELL_CD = re.compile(r"(?:^|[\s(){};&|])cd(?=[\s(){};&|]|$)[\s\S]*\)")
+
+
+def discard_differs_on_purpose(command):
+    if not isinstance(command, str):
+        return False
+    tokens = re.sub(r"[(){};&|]", " ", command).split()
+    return bool(DISCARD_SUBSHELL_CD.search(command)) or sum(token.startswith("-C") for token in tokens) >= 2
+
+
+def discard_payload_differs_on_purpose(raw):
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return False
+    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
+    return isinstance(tool_input, dict) and discard_differs_on_purpose(tool_input.get("command"))
+
+
+def split_intended(name, cases, differs):
+    """意図して Python と変えた入力を cases から外す。外した入力も hhx が 0 で終わることは compare の外で確かめる。"""
+    kept = [case for case in cases if not differs(case)]
+    excluded = [case for case in cases if differs(case)]
+    print(f"\n{name}: 意図して Python と変えた入力 {len(excluded)} 件を比較から外す", file=sys.stderr)
+    return kept, excluded
+
+
 # 既存のテストのサンドボックスの場所。記録した入力のうち、ここを差分テストのサンドボックスに差し替える。
 HARVESTED_SANDBOX = re.compile(
     r"/[^\s'\";&|()]*?/(?:worktree-guard-test-|resolve-test-|snapshot-test-|wt-env-test-|worktree-policy-test-|"
@@ -478,6 +512,11 @@ class DiscardDifferentialTest(unittest.TestCase):
         decision, reason = run_python(self.module, lambda text: "git" in text, raw=raw, argv=argv)
         return decision, reason.replace(*DISCARD_CHANGED_REASON)
 
+    def run_excluded(self, raws):
+        """比較から外した入力も、hhx が 0 で終わること (run_hhx が確かめる) だけは見る。"""
+        for raw in raws:
+            run_hhx(self.NAME, raw=raw, cwd=self.paths["{NOTREPO}"])
+
     def commands(self, rng, count):
         bases = unique(self.expand(command) for _kind, command, raw, _cwd in self.records
                        if raw is None and isinstance(command, str) and command)
@@ -498,6 +537,8 @@ class DiscardDifferentialTest(unittest.TestCase):
             if cwd is not None:
                 payload["cwd"] = cwd
             payloads.append(json.dumps(payload, ensure_ascii=False))
+        payloads, excluded = split_intended("discard-guard (Bash)", payloads, discard_payload_differs_on_purpose)
+        self.run_excluded(excluded)
         compare(self, "discard-guard (Bash)", payloads, lambda raw: self.run_python(raw=raw),
                 lambda raw: run_hhx(self.NAME, raw=raw, cwd=self.paths["{NOTREPO}"]), workers=1)
 
@@ -510,6 +551,8 @@ class DiscardDifferentialTest(unittest.TestCase):
         rng = random.Random(SEED + 7)
         payloads = [json.dumps({"tool_input": {"command": command}, "cwd": self.paths["{MISSING}"]}, ensure_ascii=False)
                     for command in self.commands(rng, CASES)]
+        payloads, excluded = split_intended("discard-guard (detection)", payloads, discard_payload_differs_on_purpose)
+        self.run_excluded(excluded)
         compare(self, "discard-guard (detection)", payloads, lambda raw: self.run_python(raw=raw),
                 lambda raw: run_hhx(self.NAME, raw=raw, cwd=self.paths["{NOTREPO}"]))
 
@@ -520,11 +563,16 @@ class DiscardDifferentialTest(unittest.TestCase):
         raws += ['{"tool_input": {"command": "git reset --hard"}}', '{"tool_input": {"command": ["git reset --hard"]}}',
                  '{"tool_input": {"command": "git reset --hard"}, "cwd": 1}', '"git reset --hard"', "git reset --hard",
                  '{"tool_input": {"command": "git reset --hard"}, "cwd": "/tmp/\\u0000x"}', "null", "[]"]
-        compare(self, "discard-guard (payload)", unique(raws), lambda raw: self.run_python(raw=raw),
+        raws, excluded = split_intended("discard-guard (payload)", unique(raws), discard_payload_differs_on_purpose)
+        self.run_excluded(excluded)
+        compare(self, "discard-guard (payload)", raws, lambda raw: self.run_python(raw=raw),
                 lambda raw: run_hhx(self.NAME, raw=raw, cwd=self.paths["{NOTREPO}"]), workers=1)
         for directory in (self.paths["{NOTREPO}"], self.paths["{A}"]):
             os.chdir(directory)
-            argvs = self.commands(rng, CASES // 10)
+            argvs, excluded = split_intended(f"discard-guard (argv in {os.path.basename(directory)})",
+                                             self.commands(rng, CASES // 10), discard_differs_on_purpose)
+            for argv in excluded:
+                run_hhx(self.NAME, argv=argv, cwd=directory)
             compare(self, f"discard-guard (argv in {os.path.basename(directory)})", argvs,
                     lambda argv: self.run_python(argv=argv),
                     lambda argv, cwd=directory: run_hhx(self.NAME, argv=argv, cwd=cwd), workers=1)

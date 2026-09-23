@@ -93,6 +93,7 @@ and `git apply -R` / `--3way` / `--reject`.
 Before such a command runs, it commits the working tree, tracked and untracked files alike, to the reflog of `refs/hhx/discard-snapshot`.
 It leaves the working tree and the index untouched, and it saves nothing when the working tree matches `HEAD`.
 It follows literal `cd` and `git -C` to find the repository, and saves every repository the command discards in.
+A `cd` inside `( ... )` or `$( ... )` ends at the closing parenthesis, and several `-C` in one `git` call apply in order, as in Git.
 
 The ref lives in the common Git directory, so all worktrees of a repository share it.
 Each entry's message ends with `@ <worktree>`, the top-level directory of the worktree it came from. To restore:
@@ -133,9 +134,6 @@ which tells it to report to the user instead of trying another command.
 - It misses `git checkout <path>` and `git checkout <commit> <path>` written without `--`, `git checkout --ours <path>`, and `git rm -f`.
 - It misses a discarding command written after a global option it does not list, such as `git -P reset --hard` or `git --no-optional-locks reset --hard`.
   It lists `-c`, `-C`, `-p`, `--paginate`, `--no-pager`, `--git-dir=`, `--work-tree=`, `--exec-path=`, and `--literal-pathspecs`.
-- It can save a different repository from the one the command discards in when one `git` call has several `-C`
-  (it resolves only the last one, from the starting directory), or when a `cd` inside `( ... )` is followed by a command outside it
-  (it keeps the `cd` after the closing parenthesis).
 - It does not save uncommitted changes inside submodules, so `git reset --hard --recurse-submodules` still loses them.
   An untracked nested repository is saved only as its commit ID, so `git clean -ffd` still loses its files and history.
 - Text that only mentions a discarding command, such as a heredoc, also triggers a snapshot.
@@ -143,6 +141,8 @@ which tells it to report to the user instead of trying another command.
   `GIT_DIR` / `--git-dir` / `--work-tree`, and directories that do not exist yet (created by `mkdir` or `git clone` in the same command).
   Run the step that creates the directory first, in a separate command.
 - Codex does not pass the working directory of each command to hooks, only the one the session started in, so it decides the target from that.
+- It treats a `cd` in a pipeline or in a background command (`cd dir | ...`, `cd dir & ...`) as if it changed the directory
+  for the rest of the command, although the shell may run it in a subshell.
 
 ## License
 
