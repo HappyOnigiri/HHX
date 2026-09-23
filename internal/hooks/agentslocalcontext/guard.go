@@ -2,9 +2,10 @@
 //
 // SessionStart と PreToolUse で、対象のパスに適用されるファイルを Git のルートから順に探し、
 // 同じセッションへ未注入か内容が変わったものだけを developer context として返す。
-// SessionStart（compact）では記録済みのルールを読み直して注入し、記録をその内容で置き換える。
+// SessionStart は compact なら記録済みのルールを読み直して注入し、記録をその内容で置き換える。
+// それ以外の SessionStart（startup・resume・clear）は、PreToolUse と同じく cwd のルールを記録して注入する。
 // SubagentStart では記録済みのルールを毎回すべて注入する（記録は変えない）。
-// それ以外のイベント（clear の SessionStart、SessionEnd など）では何もせず、記録も消さない。
+// SessionStart・PreToolUse・SubagentStart 以外のイベント（SessionEnd など）では何もせず、記録も消さない。
 //
 // 警告は systemMessage で知らせるが、判断のフィールドは返さず、Codex のツールの実行やセッションの進行を止めない。
 // 一次ゲートは無く、全呼び出しで判定する。デバッグ経路の引数は stdin の代わりの payload（JSON）として読む。
