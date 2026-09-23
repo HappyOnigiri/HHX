@@ -127,7 +127,7 @@ which tells it to report to the user instead of trying another command.
 
 `discard-guard` errs on the side of saving:
 
-- Ignored files are not saved, so `git clean -fdx` still loses them.
+- Untracked ignored files are not saved, so `git clean -fdx` still loses them. Tracked files that match `.gitignore` are saved.
 - It cannot save what a command discards on another machine, for example through `ssh`.
 - It misses `--git-dir <path>` written with a space instead of `=`.
 - Text that only mentions a discarding command, such as a heredoc, also triggers a snapshot.
