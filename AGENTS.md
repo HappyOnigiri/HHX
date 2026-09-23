@@ -28,6 +28,8 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `internal/install`: Claude の settings.json と Codex の hooks.json の読み書き
 - `internal/config`: `~/.config/hhx/config.yaml` の読み込み
 - `internal/update`: GitHub Releases の確認と、Release 添付の `install.sh` による更新（`hhx update`）
+- `internal/waitci`: `hhx wait-ci`（PR の CI の完了を 1 回だけ報告する）の判定の本体。引数の解析と出力は `cmd/hhx/waitci.go` が持つ。
+  hook ではないので hook の実行時の保護（fail-open）を通さない。1 行目の結論・最終行の `wait-ci: exit=...`・終了コードは読み手との契約なので変えない。
 - `scripts/`: 配布物のビルド、インストーラーとアンインストーラー、それらのテスト
 - `.github/workflows/`: CI とリリース（[docs/release.md](docs/release.md)）、flaky なテストの起票（`report-flaky-tests.yml`）
 - `.github/scripts/`: flaky なテストの issue を起票する reporter（`actions/github-script` から呼ぶ）
