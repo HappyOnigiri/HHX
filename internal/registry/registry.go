@@ -5,6 +5,7 @@ package registry
 import (
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
 	"github.com/HappyOnigiri/hhx/internal/hooks/dangerousrmguard"
+	"github.com/HappyOnigiri/hhx/internal/hooks/discardguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/forbiddentermguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/githookspathguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/idlewaitguard"
@@ -17,6 +18,7 @@ import (
 // 移行元の Python 実装を登録していた順に合わせ、移植した hook はその位置へ差し込む。
 var definitions = []hookrt.Definition{
 	prmergeguard.Definition(),
+	discardguard.Definition(),
 	githookspathguard.Definition(),
 	irreversibleguard.Definition(),
 	dangerousrmguard.Definition(),

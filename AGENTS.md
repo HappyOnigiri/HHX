@@ -79,5 +79,7 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
   - 移植元の Python テストのケースは L2 も含めてすべて表の行として移す。L1 相当は `hooktest` で実運用と同じ経路（stdin の payload、argv）から起動し、判定と発火したルールのラベルを見る。
   - 奇妙な入力（空、`null`、`[]`、型の違う `command`・`tool_input`）、末尾の改行、設定で無効にしたときの無出力を足す。
   - テストには実際の禁止語や個人のパスを書かず、架空の値（`acme-internal`、`/Users/alice`）を使う。
+  - cwd が空のときやデバッグ経路でプロセスの作業ディレクトリを使う hook のテストは、`TestMain` で git 管理下でない一時ディレクトリへ移る
+    （discard-guard はそこに snapshot を作ろうとするので、パッケージのディレクトリのままだと開発中のリポジトリに ref を作る）。
 - 互換スイートでは、`compat/helpers.py` の `PORTED_HOOKS` に足し、`make compat-test` で L1 と argv の経路が全件通ることを確かめる。
   既定で無効にした hook は `DEFAULT_OFF_HOOKS` にも足す（互換スイートは設定ファイルで有効にして流す）。

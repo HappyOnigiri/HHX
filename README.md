@@ -62,6 +62,7 @@ A missing or broken file never stops a hook: hooks fall back to their defaults.
 | Hook | Default | What it denies |
 | --- | --- | --- |
 | `pr-merge-guard` | on | Merging a pull request: `gh pr merge`, the merge REST endpoints, the GraphQL merge mutations, GitHub API updates through `curl` / `wget`, and `git fetch ... pull/N/head` |
+| `discard-guard` | on | Nothing by itself. Before a Git command that discards uncommitted changes, it saves a snapshot of the working tree (see below); it denies the command only when it cannot tell which repository is affected or cannot save the snapshot |
 | `idle-wait-guard` | on | Commands that do nothing but wait or print literals (`sleep 600`, `echo ok`), which agents use to fill turns while waiting |
 | `forbidden-term-guard` | on | Sending a PR or issue body that contains a term from the repository's list (see [docs/forbidden-terms.md](docs/forbidden-terms.md)) |
 | `irreversible-guard` | on | Operations nobody can undo: revoking or deleting credentials, publishing to package registries (unless `--dry-run`), deleting remote resources, destroying Git objects, erasing disks or backups, writing to secret files (`.env*`, `~/.ssh`, `*.pem`) from any tool, and deleting or moving hhx itself, `~/.config/hhx`, or the files that register the hooks |
@@ -84,6 +85,29 @@ hooks:
 so the agent gets a reason it can act on instead of a prompt that interrupts the user.
 Newer Claude Code versions may have changed the built-in check.
 
+### Discard snapshots
+
+`discard-guard` watches `git reset --hard`, the discarding forms of `git checkout` (`-- <path>`, `.`, `-f`, `-B`),
+`git switch -f` / `-C` / `--discard-changes`, `git restore <path>` (except `--staged` alone), `git clean -f`,
+and `git apply -R` / `--3way` / `--reject`.
+Before such a command runs, it commits the working tree, tracked and untracked files alike, to the reflog of `refs/hhx/discard-snapshot`.
+It leaves the working tree and the index untouched, and it saves nothing when the working tree matches `HEAD`.
+It follows literal `cd` and `git -C` to find the repository, and saves every repository the command discards in.
+
+The ref lives in the common Git directory, so all worktrees of a repository share it.
+Each entry's message ends with `@ <worktree>`, the top-level directory of the worktree it came from. To restore:
+
+```sh
+# 1. Find the entry of your worktree
+git reflog show --format='%gd %gs' refs/hhx/discard-snapshot
+# 2. Put its files back into the working tree (the index is left alone)
+git restore --source='refs/hhx/discard-snapshot@{N}' --worktree -- .
+# or take a single file
+git show 'refs/hhx/discard-snapshot@{N}:path/to/file'
+```
+
+Snapshots are reachable only from the reflog, so `git gc` expires old entries like any other reflog entry.
+
 ### Allowing merges for one session
 
 Start the agent CLI with `AGENT_ALLOW_PR_MERGE=1` to let `pr-merge-guard` pass everything in that session.
@@ -100,6 +124,25 @@ another shell (`sh -c '...'`), a script file, or another language (`python3 -c .
 Quoted text is not treated as a command, so `echo 'gh pr merge'` is allowed on purpose.
 What discourages an agent from working around a guard is the reason in the denial,
 which tells it to report to the user instead of trying another command.
+
+`discard-guard` errs on the side of saving:
+
+- Untracked ignored files are not saved, so `git clean -fdx` still loses them. Tracked files that match `.gitignore` are saved.
+- It cannot save what a command discards on another machine, for example through `ssh`.
+- It misses `--git-dir <path>` written with a space instead of `=`.
+- It misses `git checkout <path>` and `git checkout <commit> <path>` written without `--`, `git checkout --ours <path>`, and `git rm -f`.
+- It misses a discarding command written after a global option it does not list, such as `git -P reset --hard` or `git --no-optional-locks reset --hard`.
+  It lists `-c`, `-C`, `-p`, `--paginate`, `--no-pager`, `--git-dir=`, `--work-tree=`, `--exec-path=`, and `--literal-pathspecs`.
+- It can save a different repository from the one the command discards in when one `git` call has several `-C`
+  (it resolves only the last one, from the starting directory), or when a `cd` inside `( ... )` is followed by a command outside it
+  (it keeps the `cd` after the closing parenthesis).
+- It does not save uncommitted changes inside submodules, so `git reset --hard --recurse-submodules` still loses them.
+  An untracked nested repository is saved only as its commit ID, so `git clean -ffd` still loses its files and history.
+- Text that only mentions a discarding command, such as a heredoc, also triggers a snapshot.
+- It denies commands whose target it cannot follow: paths with variables, globs, or quotes, `pushd` / `popd`, `sh -c`,
+  `GIT_DIR` / `--git-dir` / `--work-tree`, and directories that do not exist yet (created by `mkdir` or `git clone` in the same command).
+  Run the step that creates the directory first, in a separate command.
+- Codex does not pass the working directory of each command to hooks, only the one the session started in, so it decides the target from that.
 
 ## License
 

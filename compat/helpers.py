@@ -36,6 +36,7 @@ if TARGET not in ("hhx", "python"):
 # hhx へ移植済みの hook 名。移植した hook はここへ足し、その L1・L3 を hhx に向けて全件通す。
 PORTED_HOOKS = frozenset({
     "dangerous-rm-guard",
+    "discard-guard",
     "forbidden-term-guard",
     "git-hookspath-guard",
     "idle-wait-guard",
@@ -316,7 +317,11 @@ def make_repo(path, dirty=True, ignored=False, commit=True):
     return str(path)
 
 
-def snapshot_ref_exists(repo, ref="refs/claude/wt-snapshot"):
+# discard-guard が snapshot を積む ref。hhx では Python 実装の refs/claude/wt-snapshot から名前を変えた。
+SNAPSHOT_REF = "refs/hhx/discard-snapshot" if TARGET == "hhx" else "refs/claude/wt-snapshot"
+
+
+def snapshot_ref_exists(repo, ref=SNAPSHOT_REF):
     proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "-q", ref],
                           capture_output=True, text=True, env={**os.environ, **GIT_ISOLATION})
     return proc.returncode == 0
