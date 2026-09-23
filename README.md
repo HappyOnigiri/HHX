@@ -130,6 +130,14 @@ which tells it to report to the user instead of trying another command.
 - Untracked ignored files are not saved, so `git clean -fdx` still loses them. Tracked files that match `.gitignore` are saved.
 - It cannot save what a command discards on another machine, for example through `ssh`.
 - It misses `--git-dir <path>` written with a space instead of `=`.
+- It misses `git checkout <path>` and `git checkout <commit> <path>` written without `--`, `git checkout --ours <path>`, and `git rm -f`.
+- It misses a discarding command written after a global option it does not list, such as `git -P reset --hard` or `git --no-optional-locks reset --hard`.
+  It lists `-c`, `-C`, `-p`, `--paginate`, `--no-pager`, `--git-dir=`, `--work-tree=`, `--exec-path=`, and `--literal-pathspecs`.
+- It can save a different repository from the one the command discards in when one `git` call has several `-C`
+  (it resolves only the last one, from the starting directory), or when a `cd` inside `( ... )` is followed by a command outside it
+  (it keeps the `cd` after the closing parenthesis).
+- It does not save uncommitted changes inside submodules, so `git reset --hard --recurse-submodules` still loses them.
+  An untracked nested repository is saved only as its commit ID, so `git clean -ffd` still loses its files and history.
 - Text that only mentions a discarding command, such as a heredoc, also triggers a snapshot.
 - It denies commands whose target it cannot follow: paths with variables, globs, or quotes, `pushd` / `popd`, `sh -c`,
   `GIT_DIR` / `--git-dir` / `--work-tree`, and directories that do not exist yet (created by `mkdir` or `git clone` in the same command).
