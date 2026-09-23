@@ -230,6 +230,20 @@ func TestLanguageSettingSelectsTheOutput(t *testing.T) {
 	}
 }
 
+// install の設定検査のエラーは、Error() が表示言語によらず英語で、表示するときだけ表示言語の文面になる。
+func TestMessageErrorIsEnglishAndDisplayedInTheLanguage(t *testing.T) {
+	err := error(&messageError{id: idInvalidLanguage, data: map[string]any{"Path": "/p/config.yaml", "Value": `"fr"`}})
+	if want := messages.Text(i18n.English, idInvalidLanguage, map[string]any{"Path": "/p/config.yaml", "Value": `"fr"`}); err.Error() != want {
+		t.Errorf("Error()=%q, want %q", err.Error(), want)
+	}
+	for _, language := range []i18n.Language{i18n.English, i18n.Japanese} {
+		want := messages.Text(language, idInvalidLanguage, map[string]any{"Path": "/p/config.yaml", "Value": `"fr"`})
+		if got := displayError(language, err); got != want {
+			t.Errorf("%s: displayError()=%q, want %q", language, got, want)
+		}
+	}
+}
+
 // 最終行 `wait-ci: exit=...`・接頭辞・終了コードは読み手との契約なので、表示言語で変わらない。
 func TestWaitCIContractIsTheSameInEveryLanguage(t *testing.T) {
 	check := waitci.Check{Name: "tests", Done: true, Result: "FAILURE", URL: "https://example.test/tests"}

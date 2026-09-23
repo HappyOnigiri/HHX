@@ -69,11 +69,14 @@ func ResolvePR(
 			if pending != nil {
 				return "", pending
 			}
-			message := messages.Text(language, idNoPR, map[string]any{"SHA": sha})
-			if elapsed != 0 {
-				message += messages.Text(language, idNoPRRetried, map[string]any{"Seconds": elapsed})
+			text := func(language i18n.Language) string {
+				message := messages.Text(language, idNoPR, map[string]any{"SHA": sha})
+				if elapsed != 0 {
+					message += messages.Text(language, idNoPRRetried, map[string]any{"Seconds": elapsed})
+				}
+				return message
 			}
-			return "", &NoPullRequestError{Message: message}
+			return "", &NoPullRequestError{Message: text(language), English: text(i18n.English)}
 		}
 		if progress != nil {
 			reason := messages.T(language, idPRMissing)
@@ -141,7 +144,7 @@ func (w *Waiter) Run() Outcome {
 			}
 			state.failures++
 			if !retryable || state.failures >= FetchFailureLimit {
-				return Outcome{Status: StatusError, Elapsed: elapsed, Message: err.Error()}
+				return Outcome{Status: StatusError, Elapsed: elapsed, Message: DisplayMessage(err)}
 			}
 			w.report(messages.Text(w.Language, idFetchFailed, map[string]any{"Elapsed": elapsed, "Count": state.failures}))
 			w.Clock.Sleep(seconds(w.Interval))
@@ -264,7 +267,7 @@ func (w *Waiter) ciAbsent() bool {
 		if err != nil {
 			// 分からないときは「CI はある」側に倒す。ここで待ちを打ち切ると、
 			// 登録が遅れているだけの check を見ないまま成功で終わってしまう。
-			w.report(messages.Text(w.Language, idCIUnknown, map[string]any{"Error": err.Error()}))
+			w.report(messages.Text(w.Language, idCIUnknown, map[string]any{"Error": DisplayMessage(err)}))
 			known = true
 		}
 		w.ciKnown = &known

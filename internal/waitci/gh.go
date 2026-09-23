@@ -145,8 +145,11 @@ func (g GH) capture(args []string) (string, error) {
 func asCount(language i18n.Language, text string) (int, error) {
 	// Python の str.isdigit と int。gh の --jq の出力は ASCII の数字なので ASCII に限る。
 	if text == "" || strings.Trim(text, "0123456789") != "" {
-		message := messages.Text(language, idCountUnread, map[string]any{"Output": pythonRepr(text)})
-		return 0, &FetchError{Message: message, Retryable: true}
+		data := map[string]any{"Output": pythonRepr(text)}
+		return 0, &FetchError{
+			Message: messages.Text(language, idCountUnread, data), English: messages.Text(i18n.English, idCountUnread, data),
+			Retryable: true,
+		}
 	}
 	count, err := strconv.Atoi(text)
 	if err != nil {
@@ -206,13 +209,19 @@ func (g GH) Fetch(reference string) (Snapshot, error) {
 	}
 	var payload any
 	if err := json.Unmarshal([]byte(result.Stdout), &payload); err != nil {
-		message := messages.Text(g.Language, idJSONUnread, map[string]any{"Error": err.Error()})
-		return Snapshot{}, &FetchError{Message: message, Retryable: true}
+		data := map[string]any{"Error": err.Error()}
+		return Snapshot{}, &FetchError{
+			Message: messages.Text(g.Language, idJSONUnread, data), English: messages.Text(i18n.English, idJSONUnread, data),
+			Retryable: true,
+		}
 	}
 	object, ok := payload.(map[string]any)
 	if !ok {
 		// Python 実装は AttributeError で落ちる。読めない出力として再試行する。
-		return Snapshot{}, &FetchError{Message: messages.T(g.Language, idJSONNotObject), Retryable: true}
+		return Snapshot{}, &FetchError{
+			Message: messages.T(g.Language, idJSONNotObject), English: messages.T(i18n.English, idJSONNotObject),
+			Retryable: true,
+		}
 	}
 	// 配列でない rollup は、Python では要素がオブジェクトでないので読み飛ばされ、0 件になる。
 	rollup, _ := object["statusCheckRollup"].([]any)
@@ -226,7 +235,10 @@ func (g GH) Fetch(reference string) (Snapshot, error) {
 // FindPRBySHA は commit を含む open PR の番号を返す。
 func (g GH) FindPRBySHA(sha string) (string, error) {
 	if sha == "" {
-		return "", &FetchError{Message: messages.T(g.Language, idNoDetachedHead), Retryable: false}
+		return "", &FetchError{
+			Message: messages.T(g.Language, idNoDetachedHead), English: messages.T(i18n.English, idNoDetachedHead),
+			Retryable: false,
+		}
 	}
 	result, err := g.run([]string{
 		"pr", "list", "--search", sha, "--state", "open", "--json", "number", "--jq", ".[].number", "--limit", "1",
@@ -239,7 +251,10 @@ func (g GH) FindPRBySHA(sha string) (string, error) {
 	}
 	number := pycompat.Strip(result.Stdout)
 	if number == "" {
-		return "", &NoPullRequestError{Message: messages.Text(g.Language, idNoPR, map[string]any{"SHA": sha})}
+		data := map[string]any{"SHA": sha}
+		return "", &NoPullRequestError{
+			Message: messages.Text(g.Language, idNoPR, data), English: messages.Text(i18n.English, idNoPR, data),
+		}
 	}
 	return number, nil
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 )
 
 // call は偽の Runner が 1 回に返す応答である。
@@ -92,6 +94,10 @@ func TestMissingSHAIsNotLookedUp(t *testing.T) {
 	if !errors.As(err, &fetchErr) || fetchErr.Retryable || fetchErr.Message != messages.T(testLanguage, idNoDetachedHead) ||
 		len(runner.calls) != 0 {
 		t.Fatalf("err=%#v calls=%q", err, runner.calls)
+	}
+	// Error() はログとテストのため表示言語によらず英語で、表示には DisplayMessage が表示言語の文面を返す。
+	if err.Error() != messages.T(i18n.English, idNoDetachedHead) || DisplayMessage(err) != fetchErr.Message {
+		t.Fatalf("Error()=%q DisplayMessage()=%q", err.Error(), DisplayMessage(err))
 	}
 }
 
@@ -227,7 +233,8 @@ func TestUnreadableOutputIsUndecidable(t *testing.T) {
 		}
 	}
 	_, err := GH{Language: testLanguage, Runner: &fakeRunner{responses: []call{stdout("0"), stdout("null")}}}.CIEvidence()
-	if err == nil || err.Error() != messages.Text(testLanguage, idCountUnread, map[string]any{"Output": "'null'"}) {
+	if err == nil || DisplayMessage(err) != messages.Text(testLanguage, idCountUnread, map[string]any{"Output": "'null'"}) ||
+		err.Error() != messages.Text(i18n.English, idCountUnread, map[string]any{"Output": "'null'"}) {
 		t.Fatalf("err=%v", err)
 	}
 }

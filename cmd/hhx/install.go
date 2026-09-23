@@ -26,8 +26,8 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	// 実行時の hook は壊れた設定を既定値で読み流すため、壊れていることに気付く機会は install しかない。
-	if err := validateConfig(language, registry.All()); err != nil {
-		_, _ = fmt.Fprintf(stderr, "hhx install: %v\n", err)
+	if err := validateConfig(registry.All()); err != nil {
+		_, _ = fmt.Fprintf(stderr, "hhx install: %s\n", displayError(language, err))
 		return 1
 	}
 	options, err := installOptions()
@@ -158,8 +158,26 @@ func installOptions() (install.Options, error) {
 	}, nil
 }
 
+// messageError はカタログの文面で表示するエラーである。Error() はログとテストのため英語を返し、
+// 表示するときは displayError が表示言語の文面を選ぶ。
+type messageError struct {
+	id   string
+	data map[string]any
+}
+
+func (e *messageError) Error() string { return messages.Text(i18n.English, e.id, e.data) }
+
+// displayError は err を表示する文面を返す。messageError なら表示言語の文面にする。
+func displayError(language i18n.Language, err error) string {
+	var message *messageError
+	if errors.As(err, &message) {
+		return messages.Text(language, message.id, message.data)
+	}
+	return err.Error()
+}
+
 // validateConfig は設定ファイルの構文、hook 名の綴り、hook 固有の設定の型を definitions に照らして確かめる。
-func validateConfig(language i18n.Language, definitions []hookrt.Definition) error {
+func validateConfig(definitions []hookrt.Definition) error {
 	path, err := config.DefaultPath()
 	if err != nil {
 		return err
@@ -169,18 +187,18 @@ func validateConfig(language i18n.Language, definitions []hookrt.Definition) err
 		return err
 	}
 	if _, err := i18n.Parse(cfg.Language); err != nil {
-		return errors.New(messages.Text(language, idInvalidLanguage, map[string]any{
+		return &messageError{id: idInvalidLanguage, data: map[string]any{
 			"Path": path, "Value": strconv.Quote(cfg.Language),
-		}))
+		}}
 	}
 	known := map[string]bool{}
 	for _, definition := range definitions {
 		known[definition.Name] = true
 	}
 	if unknown := cfg.UnknownHooks(func(name string) bool { return known[name] }); len(unknown) > 0 {
-		return errors.New(messages.Text(language, idUnknownHooks, map[string]any{
+		return &messageError{id: idUnknownHooks, data: map[string]any{
 			"Path": path, "Hooks": strings.Join(unknown, ", "),
-		}))
+		}}
 	}
 	for _, definition := range definitions {
 		if definition.NewSettings == nil {

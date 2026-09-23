@@ -280,7 +280,7 @@ func runWaitCI(args []string, stdout, stderr io.Writer) int {
 			verdict(idSkippedNoPR, map[string]any{"Reason": noPR.Message})
 			return finish(0, 0, 0)
 		case err != nil:
-			verdict(idDetachedFailed, map[string]any{"Error": err.Error()})
+			verdict(idDetachedFailed, map[string]any{"Error": waitci.DisplayMessage(err)})
 			return finish(4, 0, 0)
 		}
 		reference = number
