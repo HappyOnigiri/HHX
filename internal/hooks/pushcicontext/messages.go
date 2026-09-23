@@ -81,7 +81,8 @@ var messages = i18n.Register(i18n.Catalog{
 			"report only before it starts, when it ends, and when a decision is needed. In Code Mode, wait like this.\n" +
 			codeModeStart + "\"exit code not confirmed\"" + codeModeEnd +
 			"If the outer call returns a cell_id, wait on the same ID with functions.wait (yield_time_ms:3600000). " +
-			"Do not restart it or poll twice. Without Code Mode, follow it until it ends with write_stdin on empty " +
+			"Do not restart it or run a second, overlapping poll; if functions.wait returns while the cell is still running, " +
+			"wait on the same ID again until it ends. Without Code Mode, follow it until it ends with write_stdin on empty " +
 			"input, using the longest wait time available.\n",
 		JA: "{{.Label}}中は定期報告と60秒を超える待機回避の例外とし、開始前と終了・判断が必要な時だけ報告する。" +
 			"Code Mode では次の形で待つ。\n" +
