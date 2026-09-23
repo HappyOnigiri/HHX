@@ -166,6 +166,16 @@ func TestUpdateInstructionCanBeReplaced(t *testing.T) {
 	if !strings.Contains(context, "\n- 食い違いがあれば `gh pr edit` で本文を直す。差分と一致していれば") || strings.Contains(context, "update-pr") {
 		t.Fatalf("the instruction was not replaced:\n%s", context)
 	}
+	for value, want := range map[string]string{
+		"gh pr edit で本文を直す":                "\n- gh pr edit で本文を直す。差分と一致していれば",
+		"  gh pr edit で本文を直す！  ":           "\n- gh pr edit で本文を直す！差分と一致していれば",
+		"Update the body with gh pr edit.": "\n- Update the body with gh pr edit.差分と一致していれば",
+	} {
+		context, _ := f.run(t, call{config: "hooks:\n  pr-body-staleness:\n    update-instruction: \"" + value + "\"\n"})
+		if !strings.Contains(context, want) {
+			t.Errorf("update-instruction %q must end the sentence before the next one:\n%s", value, context)
+		}
+	}
 	for _, config := range []string{
 		"hooks:\n  pr-body-staleness:\n    update-instruction: \"  \"\n",
 		"hooks:\n  pr-body-staleness:\n    update-instruction: [a]\n",

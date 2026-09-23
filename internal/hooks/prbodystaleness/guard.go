@@ -64,7 +64,7 @@ func Definition() hookrt.Definition {
 type Settings struct {
 	Enabled *bool `yaml:"enabled"`
 	// UpdateInstruction は、本文とコミットが食い違っていたときの本文の更新方法の案内（1 文）である。
-	// 空なら既定の文面（update-pr スキルを使う案内）を使う。
+	// 空なら既定の文面（update-pr スキルを使う案内）を使う。文末の記号が無ければ句点を足す。
 	UpdateInstruction string `yaml:"update-instruction"`
 }
 
@@ -122,8 +122,8 @@ func run(c *hookrt.Context) error {
 	// 設定の型が違っても（install が報告する）、既定の文面で注意は出す。
 	_ = c.Settings(&settings)
 	instruction := defaultUpdateInstruction
-	if strings.TrimSpace(settings.UpdateInstruction) != "" {
-		instruction = settings.UpdateInstruction
+	if custom := strings.TrimSpace(settings.UpdateInstruction); custom != "" {
+		instruction = terminated(custom)
 	}
 	text, err := message(pullRequest, headlines, instruction)
 	if err != nil {
@@ -487,6 +487,15 @@ func digitValue(char rune) int {
 }
 
 // message は注入する注意を組み立てる。
+// terminated は、文末の記号が無い案内に句点を足す。注入文では案内の直後に次の文が続き、句点が無いと 1 文につながるため。
+func terminated(sentence string) string {
+	last, _ := utf8.DecodeLastRuneInString(sentence)
+	if strings.ContainsRune("。．.！!？?", last) {
+		return sentence
+	}
+	return sentence + "。"
+}
+
 func message(pullRequest map[string]any, headlines []any, instruction string) (string, error) {
 	number, err := pyDecimal(pullRequest["number"])
 	if err != nil {

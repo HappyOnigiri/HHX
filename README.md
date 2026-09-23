@@ -90,7 +90,7 @@ hooks:
 ```
 
 `pr-body-staleness` tells the agent to update the body with the `update-pr` skill.
-Replace that sentence with your own way of updating a pull request body:
+Replace that sentence with your own way of updating a pull request body (a closing `。` is added when it has no sentence-ending mark):
 
 ```yaml
 hooks:
