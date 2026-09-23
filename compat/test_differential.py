@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Python 実装と hhx の差分テスト (irreversible-guard・dangerous-rm-guard・discard-guard)。
+"""Python 実装と hhx の差分テスト (irreversible-guard・dangerous-rm-guard・discard-guard・exit-plan-subagent-guard)。
 
 実行: HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレクトリ> make compat-test（compat/README.md を参照）
 
@@ -394,6 +394,41 @@ DISCARD_FRAGMENTS = (
 DISCARD_CHANGED_REASON = ("実行せず文字列として書きたいだけなら Write / Edit ツールを使ってください。",
                           "実行せず文字列として書きたいだけなら、ファイルを編集するツールを使ってください。")
 
+# hhx で意図して Python 実装から変えた、snapshot の対象の特定。どちらも Python 実装は別のリポジトリを保存して通し、
+# 本来の対象の変更を失う (データ消失) ので、1 対 1 よりデータを守ることを優先して直した (AGENTS.md の「hook の移植の型」)。
+#   - ( ... ) / $( ... ) の中の cd を閉じ括弧で取り消す。Python は括弧を空白として読み、閉じた後も cd を残す。
+#     hhx は括弧を無視した作業ディレクトリ (Python の意味) も候補に残し、両方を保存する。
+#   - 1 つの git の複数の -C を順に適用する。Python は最後の -C だけを cwd から解決する。
+# これに当たりうる入力 (cd の後に閉じ括弧がある、-C で始まるトークンが 2 つ以上ある) は判定が違ってよいので比べない。
+# 実際の判定は Go のテスト (TestResolveCdInsideSubshellDoesNotLeak・TestResolveMultipleDashCAreApplied など) で固定している。
+# 条件は広めにとり、違いうる入力を取りこぼさないことを優先する。
+DISCARD_SUBSHELL_CD = re.compile(r"(?:^|[\s(){};&|])cd(?=[\s(){};&|]|$)[\s\S]*\)")
+
+
+def discard_differs_on_purpose(command):
+    if not isinstance(command, str):
+        return False
+    tokens = re.sub(r"[(){};&|]", " ", command).split()
+    return bool(DISCARD_SUBSHELL_CD.search(command)) or sum(token.startswith("-C") for token in tokens) >= 2
+
+
+def discard_payload_differs_on_purpose(raw):
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return False
+    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
+    return isinstance(tool_input, dict) and discard_differs_on_purpose(tool_input.get("command"))
+
+
+def split_intended(name, cases, differs):
+    """意図して Python と変えた入力を cases から外す。外した入力も hhx が 0 で終わることは compare の外で確かめる。"""
+    kept = [case for case in cases if not differs(case)]
+    excluded = [case for case in cases if differs(case)]
+    print(f"\n{name}: 意図して Python と変えた入力 {len(excluded)} 件を比較から外す", file=sys.stderr)
+    return kept, excluded
+
+
 # 既存のテストのサンドボックスの場所。記録した入力のうち、ここを差分テストのサンドボックスに差し替える。
 HARVESTED_SANDBOX = re.compile(
     r"/[^\s'\";&|()]*?/(?:worktree-guard-test-|resolve-test-|snapshot-test-|wt-env-test-|worktree-policy-test-|"
@@ -478,6 +513,11 @@ class DiscardDifferentialTest(unittest.TestCase):
         decision, reason = run_python(self.module, lambda text: "git" in text, raw=raw, argv=argv)
         return decision, reason.replace(*DISCARD_CHANGED_REASON)
 
+    def run_excluded(self, raws):
+        """比較から外した入力も、hhx が 0 で終わること (run_hhx が確かめる) だけは見る。"""
+        for raw in raws:
+            run_hhx(self.NAME, raw=raw, cwd=self.paths["{NOTREPO}"])
+
     def commands(self, rng, count):
         bases = unique(self.expand(command) for _kind, command, raw, _cwd in self.records
                        if raw is None and isinstance(command, str) and command)
@@ -498,6 +538,8 @@ class DiscardDifferentialTest(unittest.TestCase):
             if cwd is not None:
                 payload["cwd"] = cwd
             payloads.append(json.dumps(payload, ensure_ascii=False))
+        payloads, excluded = split_intended("discard-guard (Bash)", payloads, discard_payload_differs_on_purpose)
+        self.run_excluded(excluded)
         compare(self, "discard-guard (Bash)", payloads, lambda raw: self.run_python(raw=raw),
                 lambda raw: run_hhx(self.NAME, raw=raw, cwd=self.paths["{NOTREPO}"]), workers=1)
 
@@ -510,6 +552,8 @@ class DiscardDifferentialTest(unittest.TestCase):
         rng = random.Random(SEED + 7)
         payloads = [json.dumps({"tool_input": {"command": command}, "cwd": self.paths["{MISSING}"]}, ensure_ascii=False)
                     for command in self.commands(rng, CASES)]
+        payloads, excluded = split_intended("discard-guard (detection)", payloads, discard_payload_differs_on_purpose)
+        self.run_excluded(excluded)
         compare(self, "discard-guard (detection)", payloads, lambda raw: self.run_python(raw=raw),
                 lambda raw: run_hhx(self.NAME, raw=raw, cwd=self.paths["{NOTREPO}"]))
 
@@ -520,15 +564,184 @@ class DiscardDifferentialTest(unittest.TestCase):
         raws += ['{"tool_input": {"command": "git reset --hard"}}', '{"tool_input": {"command": ["git reset --hard"]}}',
                  '{"tool_input": {"command": "git reset --hard"}, "cwd": 1}', '"git reset --hard"', "git reset --hard",
                  '{"tool_input": {"command": "git reset --hard"}, "cwd": "/tmp/\\u0000x"}', "null", "[]"]
-        compare(self, "discard-guard (payload)", unique(raws), lambda raw: self.run_python(raw=raw),
+        raws, excluded = split_intended("discard-guard (payload)", unique(raws), discard_payload_differs_on_purpose)
+        self.run_excluded(excluded)
+        compare(self, "discard-guard (payload)", raws, lambda raw: self.run_python(raw=raw),
                 lambda raw: run_hhx(self.NAME, raw=raw, cwd=self.paths["{NOTREPO}"]), workers=1)
         for directory in (self.paths["{NOTREPO}"], self.paths["{A}"]):
             os.chdir(directory)
-            argvs = self.commands(rng, CASES // 10)
+            argvs, excluded = split_intended(f"discard-guard (argv in {os.path.basename(directory)})",
+                                             self.commands(rng, CASES // 10), discard_differs_on_purpose)
+            for argv in excluded:
+                run_hhx(self.NAME, argv=argv, cwd=directory)
             compare(self, f"discard-guard (argv in {os.path.basename(directory)})", argvs,
                     lambda argv: self.run_python(argv=argv),
                     lambda argv, cwd=directory: run_hhx(self.NAME, argv=argv, cwd=cwd), workers=1)
         os.chdir(self.paths["{NOTREPO}"])
+
+
+# exit-plan-subagent-guard の transcript の行に差し込む断片。JSON を壊すもの、改行の変種、不正な UTF-8 を含む。
+# NaN・Infinity・対の無いサロゲートのエスケープ・深い入れ子は、hhx で再現していない違いなので入れない (hook の package の説明)。
+EXIT_PLAN_RAW_FRAGMENTS = (
+    b'"', b"\\", b",", b"{", b"}", b"[", b"]", b" ", b"\r", b"\r\n", b"\n", b"\xff", b"\xe3\x81", b"\xf0\x9f\x98",
+    b"\xed\xa0\x80", "日本".encode(), b"\\n", b"\\\"", b'"tool_use"', b'"Agent"', b'"Task"', b'"SendMessage"',
+    b"<task-notification>", b"<status>killed</status>", b"<task-id>aaa111bbb222</task-id>", b"agentId: ccc333ddd444",
+    b"Async agent launched successfully", b"resumed from transcript in the background",
+)
+
+EXIT_PLAN_AGENTS = ("aaa111bbb222", "ccc333ddd444", "a0b7129b0d13559d4", "ab12", "eee555")
+EXIT_PLAN_TOOL_IDS = ("toolu_1", "toolu_2", "toolu_3", "toolu_bash")
+EXIT_PLAN_DESCRIPTIONS = ("調査", "Design the sharding", "", "b", "a", "PR差分を機能整理", "\U0001f600 絵文字", "Zeta", "é")
+EXIT_PLAN_STATUSES = ("completed", "stopped", "killed", "failed", "error", "cancelled", "running", "queued", "Completed")
+
+# 型の違う値。Python で例外になる形 (真で dict でない message・input、配列の id) と、偽の値として読み飛ばす形を混ぜる。
+EXIT_PLAN_ODD_VALUES = (None, True, False, 0, 1, 1.0, -0.0, 1e300, 123456789012345678901234567890, "", "x", [], ["t"],
+                        {}, {"a": 1}, "toolu_1")
+
+
+@unittest.skipUnless(helpers.TARGET == "hhx", "差分テストは hhx を対象にしたときだけ流す")
+class ExitPlanDifferentialTest(unittest.TestCase):
+    """exit-plan-subagent-guard の差分テスト。
+
+    既存のテストが使う行の形 (起動の要求と結果・終了通知・再開・Bash の出力) を組み合わせた transcript と、
+    それを JSON の型やバイト列の段階で変形したものを、Python 本体と hhx の両方に読ませて判定と理由文を比べる。
+    判定材料が transcript だけなので、手書きの表では値の型 (Python の真偽・== の意味) や UTF-8 の置換、
+    改行の扱いの違いを取りこぼしやすい。
+    """
+
+    SCRIPT = "exit-plan-subagent-guard.py"
+    NAME = "exit-plan-subagent-guard"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_python_hook(cls.SCRIPT)
+        import test_exit_plan_subagent_guard
+        cls.fixtures = test_exit_plan_subagent_guard
+        cls.root = tempfile.mkdtemp(prefix="hhx-diff-exit-plan-")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    def random_line(self, rng):
+        f = self.fixtures
+        agent, tool_id = rng.choice(EXIT_PLAN_AGENTS), rng.choice(EXIT_PLAN_TOOL_IDS)
+        description = rng.choice(EXIT_PLAN_DESCRIPTIONS)
+        sidechain = rng.random() < 0.1
+        choice = rng.randrange(12)
+        if choice == 0:
+            return f.tool_use_line(tool_id, description, name=rng.choice(("Agent", "Task", "Bash", "SendMessage")),
+                                   sidechain=sidechain)
+        if choice == 1:
+            return f.launch_line(tool_id, agent, sidechain=sidechain, flat=rng.random() < 0.5)
+        if choice == 2:
+            return f.send_message_line(tool_id, agent, sidechain=sidechain)
+        if choice == 3:
+            text = rng.choice((f.RESUME_TEXT, f.REAL_LAUNCH_TEXT, f.LAUNCH_TEXT)).format(agent=agent)
+            return f.result_line(tool_id, text, sidechain=sidechain)
+        if choice == 4:
+            return f.notification_line(agent, status=rng.choice(EXIT_PLAN_STATUSES))
+        if choice == 5:
+            return f.queue_notification_line(agent, status=rng.choice(EXIT_PLAN_STATUSES))
+        if choice == 6:
+            return f.bash_result_line(rng.choice((f.LAUNCH_TEXT, f.RESUME_TEXT, "ok", "agentId: {agent}")).format(
+                agent=agent))
+        if choice == 7:
+            # 型の違う値を 1 つ差し込んだ、起動の要求か結果の行。
+            entry = json.loads(rng.choice((f.tool_use_line(tool_id, description), f.launch_line(tool_id, agent),
+                                           f.send_message_line(tool_id, agent))))
+            block = entry["message"]["content"][0]
+            target = rng.choice((entry, entry, entry["message"], block, block, block))
+            target[rng.choice(("message", "content", "id", "tool_use_id", "input", "name", "type", "isSidechain",
+                               "text"))] = rng.choice(EXIT_PLAN_ODD_VALUES)
+            return json.dumps(entry, ensure_ascii=rng.random() < 0.5)
+        if choice == 8:
+            # 数値や真偽の id と、それに対応する tool_use_id。Python の == で一致するものを混ぜる。
+            ids = (1, True, 1.0, 0, False, -0.0, None, "1", 10 ** 20, 1e20)
+            use = json.loads(f.tool_use_line(tool_id, description, name=rng.choice(("Agent", "SendMessage"))))
+            use["message"]["content"][0]["id"] = rng.choice(ids)
+            result = json.loads(f.result_line(tool_id, rng.choice((f.LAUNCH_TEXT, f.RESUME_TEXT)).format(agent=agent)))
+            result["message"]["content"][0]["tool_use_id"] = rng.choice(ids)
+            return json.dumps(use) + "\n" + json.dumps(result)
+        if choice == 9:
+            # content のブロック列の text に文字列でない値や、ブロックでない要素を混ぜる。
+            entry = json.loads(f.launch_line(tool_id, agent))
+            parts = [{"type": "text", "text": f.LAUNCH_TEXT.format(agent=agent)},
+                     {"type": "text", "text": rng.choice(EXIT_PLAN_ODD_VALUES)}, rng.choice(EXIT_PLAN_ODD_VALUES)]
+            rng.shuffle(parts)
+            entry["message"]["content"][0]["content"] = parts
+            return json.dumps(entry)
+        if choice == 10:
+            return rng.choice(("", "{ not json", "null", "[]", '"tool_use" "Agent"', "{}"))
+        return f.bash_result_line("x" * rng.choice((10, 70000)))
+
+    def mutate_bytes(self, rng, data):
+        for _ in range(rng.randint(1, 3)):
+            position = rng.randint(0, len(data))
+            if rng.random() < 0.7:
+                data = data[:position] + rng.choice(EXIT_PLAN_RAW_FRAGMENTS) + data[position:]
+            else:
+                data = data[:position] + data[position + rng.randint(1, 4):]
+        return data
+
+    def transcripts(self, rng, count):
+        f = self.fixtures
+        # 既存のテストのシナリオ (起動の対と、その後の終了・再開) を土台に、行を足し、変形する。
+        scenarios = [
+            f.launch_pair("toolu_1", "aaa111bbb222"),
+            f.launch_pair("toolu_1", "aaa111bbb222") + [f.notification_line("aaa111bbb222")],
+            f.launch_pair("toolu_1", "aaa111bbb222") + [f.notification_line("aaa111bbb222"),
+                                                         f.send_message_line("toolu_2", "aaa111bbb222"),
+                                                         f.result_line("toolu_2",
+                                                                       f.RESUME_TEXT.format(agent="aaa111bbb222"))],
+            f.launch_pair("toolu_1", "aaa111bbb222", sidechain=True),
+            [f.queue_notification_line("aaa111bbb222", status="killed")] + f.launch_pair("toolu_1", "aaa111bbb222"),
+        ]
+        results = []
+        for _ in range(count):
+            lines = list(rng.choice(scenarios))
+            for _ in range(rng.randint(0, 6)):
+                lines.insert(rng.randint(0, len(lines)), self.random_line(rng))
+            separator = rng.choice(("\n", "\n", "\r", "\r\n"))
+            data = (separator.join(lines) + rng.choice(("", separator))).encode("utf-8")
+            if rng.random() < 0.4:
+                data = self.mutate_bytes(rng, data)
+            results.append(data)
+        return results
+
+    def write(self, index, data):
+        path = os.path.join(self.root, f"t{index}.jsonl")
+        with open(path, "wb") as file:
+            file.write(data)
+        return path
+
+    def test_transcripts_via_argv(self):
+        rng = random.Random(SEED + 11)
+        paths = [self.write(index, data) for index, data in enumerate(self.transcripts(rng, CASES))]
+        paths += [os.path.join(self.root, "missing.jsonl"), self.root, ""]
+        compare(self, "exit-plan-subagent-guard (argv)", paths,
+                lambda path: run_python(self.module, lambda _text: True, argv=path),
+                lambda path: run_hhx(self.NAME, argv=path))
+
+    def test_payloads(self):
+        rng = random.Random(SEED + 12)
+        paths = [self.write(f"p{index}", data) for index, data in enumerate(self.transcripts(rng, CASES // 10))]
+        raws = []
+        for path in paths:
+            payload = {"session_id": "diff", "transcript_path": path, "hook_event_name": "PreToolUse",
+                       "tool_name": rng.choice(("ExitPlanMode", "Bash")), "tool_input": {}}
+            raws.append(json.dumps(payload))
+        path = paths[0]
+        raws += ["", " ", "ExitPlanMode", "null", '"ExitPlanMode"', '["ExitPlanMode"]',
+                 json.dumps({"tool_name": "ExitPlanMode"}), json.dumps({"tool_name": "ExitPlanMode", "transcript_path": 1}),
+                 json.dumps({"tool_name": "ExitPlanMode", "transcript_path": [path]}),
+                 json.dumps({"tool_name": "ExitPlanMode", "transcript_path": path}) + " x",
+                 json.dumps({"tool_name": "ExitPlanMode", "transcript_path": path}) + "\n",
+                 json.dumps({"tool_name": "Bash", "tool_input": {"command": "grep ExitPlanMode x"},
+                             "transcript_path": path})]
+        compare(self, "exit-plan-subagent-guard (payload)", unique(raws),
+                lambda raw: run_python(self.module, lambda text: "ExitPlanMode" in text, raw=raw),
+                lambda raw: run_hhx(self.NAME, raw=raw))
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ package pycompat
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // SpaceChars は Python の str.isspace() と、str パターンの \s が一致する文字の集合を、文字クラスの中身として書いたものである。
@@ -202,4 +203,58 @@ func QuoteJSON(s string) string {
 	}
 	out.WriteByte('"')
 	return out.String()
+}
+
+// DecodeUTF8Replace は Python の bytes.decode("utf-8", errors="replace") と同じく b を文字列にする。
+// 不正なバイト列は「最大の部分列」（Unicode の推奨する置換の単位）ごとに U+FFFD 1 つへ置き換える。
+// Go の strings.ToValidUTF8 は連続する不正なバイトをまとめて 1 つにし、utf8.DecodeRune は 1 バイトずつ置き換えるので、
+// どちらも途中で切れた多バイト文字（"\xe3\x81"）の置換の数が Python と違う。
+func DecodeUTF8Replace(b []byte) string {
+	var out strings.Builder
+	out.Grow(len(b))
+	for index := 0; index < len(b); {
+		r, size := utf8.DecodeRune(b[index:])
+		if r != utf8.RuneError || size > 1 {
+			out.Write(b[index : index+size])
+			index += size
+			continue
+		}
+		out.WriteRune(utf8.RuneError)
+		index += invalidPrefixLength(b[index:])
+	}
+	return out.String()
+}
+
+// invalidPrefixLength は、不正な UTF-8 で始まる b の先頭から、1 つの U+FFFD に置き換える長さを返す。
+// 先頭バイトが多バイト文字の開始として正しければ、2 バイト目以降の正しい継続バイトまでを含める。
+func invalidPrefixLength(b []byte) int {
+	low, high := byte(0x80), byte(0xBF)
+	var need int
+	switch lead := b[0]; {
+	case lead >= 0xC2 && lead <= 0xDF:
+		need = 1
+	case lead == 0xE0:
+		need, low = 2, 0xA0
+	case lead == 0xED:
+		need, high = 2, 0x9F
+	case lead >= 0xE1 && lead <= 0xEF:
+		need = 2
+	case lead == 0xF0:
+		need, low = 3, 0x90
+	case lead == 0xF4:
+		need, high = 3, 0x8F
+	case lead >= 0xF1 && lead <= 0xF3:
+		need = 3
+	default:
+		return 1
+	}
+	length := 1
+	for ; length <= need && length < len(b); length++ {
+		if b[length] < low || b[length] > high {
+			break
+		}
+		// 2 バイト目の範囲の制限は、3 バイト目以降には掛からない。
+		low, high = 0x80, 0xBF
+	}
+	return length
 }

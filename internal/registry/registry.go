@@ -6,6 +6,7 @@ import (
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
 	"github.com/HappyOnigiri/hhx/internal/hooks/dangerousrmguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/discardguard"
+	"github.com/HappyOnigiri/hhx/internal/hooks/exitplansubagentguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/forbiddentermguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/githookspathguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/idlewaitguard"
@@ -24,6 +25,7 @@ var definitions = []hookrt.Definition{
 	dangerousrmguard.Definition(),
 	forbiddentermguard.Definition(),
 	idlewaitguard.Definition(),
+	exitplansubagentguard.Definition(),
 }
 
 // All は登録済みの hook をすべて返す。

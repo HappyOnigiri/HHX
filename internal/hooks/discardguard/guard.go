@@ -325,9 +325,14 @@ func isDir(path string) bool {
 // cd / -C の行き先が存在しなければ特定できないものとする。存在しない cd は実行時に失敗して前のディレクトリに留まるので、
 // その後の相対パス（cd ..）を取り違えると本来の対象を保存し損ねる。
 // (cd dir && git ...) の括弧や make -C のような無関係な -C を正規表現の境界だけで見分けるのは無理があるので、トークン単位で走査する。
+//
+// 次の 2 点は移植元の Python 実装から意図して変えている。どちらも移植元では別のリポジトリを保存して通し、本来の対象の変更を失っていた。
+//   - ( ... ) と $( ... ) はサブシェルなので、中の cd を閉じ括弧で取り消す。移植元は括弧を空白として読み、閉じた後も cd を残していた。
+//     ただし括弧はクォートや case の分岐を見分けずに数えるので、実際には閉じていない括弧で cd を取り消しうる。
+//     そこで括弧を無視した作業ディレクトリ（移植元の意味）も並行して辿り、両方を候補にする。移植元より保存先が減る入力は無い。
+//   - 1 つの git に -C が複数あれば、git と同じく出現順に適用し、相対パスは直前の -C の先から辿る。移植元は最後の -C だけを cwd から解決していた。
 func resolveTargetDirs(command, cwd string) ([]string, error) {
-	// 区切り文字を空白に寄せ、区切りと語がくっついた形でも cd / git をトークンとして拾う。
-	tokens := py.Fields(separatorRE.ReplaceAllString(command, " "))
+	tokens, parens := tokenize(command)
 	count := len(tokens)
 
 	// base は模擬しているシェルの作業ディレクトリである。
@@ -341,12 +346,21 @@ func resolveTargetDirs(command, cwd string) ([]string, error) {
 	if !isDir(base) {
 		return nil, nil
 	}
+	// flat は括弧を無視して辿る作業ディレクトリである（閉じ括弧で cd を取り消さない）。
+	flat := base
 	var targets []string
+	add := func(target string) {
+		if !slices.Contains(targets, target) {
+			targets = append(targets, target)
+		}
+	}
+	// outer はサブシェルに入る前の作業ディレクトリを積む。対応の無い閉じ括弧（case の分岐など）は無視する。
+	var outer []string
 
-	// resolve は base を基準にパスを解決する。静的に追えない・存在しないなら空文字列を返す。
+	// resolve は from を基準にパスを解決する。静的に追えない・存在しないなら空文字列を返す。
 	// 先頭の ~ / ~/ だけは展開する（hook の HOME はシェルと同じなので決まる）。クォートつきの "~/x" はシェルも展開しないので、
 	// クォートを静的でないものとして特定できないままにする。~user の形は追わない。
-	resolve := func(path string) string {
+	resolve := func(from, path string) string {
 		if path == "~" || strings.HasPrefix(path, "~/") {
 			path = expandUser(path)
 		}
@@ -355,7 +369,7 @@ func resolveTargetDirs(command, cwd string) ([]string, error) {
 		}
 		full := path
 		if !strings.HasPrefix(path, "/") {
-			full = py.Join(base, path)
+			full = py.Join(from, path)
 		}
 		if !isDir(full) {
 			return ""
@@ -364,6 +378,14 @@ func resolveTargetDirs(command, cwd string) ([]string, error) {
 	}
 
 	for index, token := range tokens {
+		for _, paren := range parens[index] {
+			if paren == '(' {
+				outer = append(outer, base)
+			} else if len(outer) > 0 {
+				base = outer[len(outer)-1]
+				outer = outer[:len(outer)-1]
+			}
+		}
 		next := ""
 		if index+1 < count {
 			next = tokens[index+1]
@@ -379,11 +401,11 @@ func resolveTargetDirs(command, cwd string) ([]string, error) {
 				return nil, nil
 			}
 			path, _ := takeValue(tokens, index+1)
-			destination := resolve(path)
-			if destination == "" {
+			destination, flatDestination := resolve(base, path), resolve(flat, path)
+			if destination == "" || flatDestination == "" {
 				return nil, nil
 			}
-			base = destination
+			base, flat = destination, flatDestination
 		case isShell(token):
 			// 別のシェル経由（sh -c '...' / bash -lc '...'）は、中身をトークンとして追えない。
 			if strings.HasPrefix(next, "-") {
@@ -392,7 +414,7 @@ func resolveTargetDirs(command, cwd string) ([]string, error) {
 		case hasUnsafeEnvPrefix(token):
 			return nil, nil
 		case token == "git" || strings.HasSuffix(token, "/git"):
-			directory, subcommand, ok := parseGitOptions(tokens, index+1)
+			directories, subcommand, ok := parseGitOptions(tokens, index+1)
 			if !ok {
 				return nil, nil
 			}
@@ -400,28 +422,56 @@ func resolveTargetDirs(command, cwd string) ([]string, error) {
 			if !slices.Contains(discardSubcommands, subcommand) {
 				continue
 			}
-			target := base
-			if directory != "" {
-				if target = resolve(directory); target == "" {
-					return nil, nil
+			for _, start := range []string{base, flat} {
+				target := start
+				for _, directory := range directories {
+					if target = resolve(target, directory); target == "" {
+						return nil, nil
+					}
 				}
-			}
-			if !slices.Contains(targets, target) {
-				targets = append(targets, target)
+				add(target)
 			}
 		}
 	}
 	// 破棄系の git をトークンとして拾えなかった（クォートの中など）が、discardRules には当たっている。
 	// 多めに拾う方針なので、最後の作業ディレクトリを保存しておく。
 	if len(targets) == 0 {
-		return []string{base}, nil
+		add(base)
+		add(flat)
 	}
 	return targets, nil
 }
 
-// parseGitOptions は tokens[start:] を git の大域オプションとして読み、-C の値とサブコマンドを返す。
+// tokenize は区切り文字を空白に寄せて command をトークンに分ける。区切りと語がくっついた形でも cd / git をトークンとして拾うためである。
+// parens[i] は tokens[i] の直前にある丸括弧を出現順に持つ（サブシェルの出入りを辿るため）。
+// トークンの列は、括弧を空白として読んだ移植元と同じにする（括弧そのものはトークンにしない）。
+func tokenize(command string) (tokens []string, parens [][]byte) {
+	var pending []byte
+	rest := command
+	for {
+		location := separatorRE.FindStringIndex(rest)
+		piece := rest
+		if location != nil {
+			piece = rest[:location[0]]
+		}
+		for _, token := range py.Fields(piece) {
+			tokens = append(tokens, token)
+			parens = append(parens, pending)
+			pending = nil
+		}
+		if location == nil {
+			return tokens, parens
+		}
+		if separator := rest[location[0]]; separator == '(' || separator == ')' {
+			pending = append(pending, separator)
+		}
+		rest = rest[location[1]:]
+	}
+}
+
+// parseGitOptions は tokens[start:] を git の大域オプションとして読み、-C の値を出現順に並べたものとサブコマンドを返す。
 // サブコマンドが無ければ空文字列を返す。--git-dir / --work-tree と、値の無い -C は特定できないものとして ok を偽にする。
-func parseGitOptions(tokens []string, start int) (directory, subcommand string, ok bool) {
+func parseGitOptions(tokens []string, start int) (directories []string, subcommand string, ok bool) {
 	count := len(tokens)
 	index := start
 	for ; index < count; index++ {
@@ -429,16 +479,18 @@ func parseGitOptions(tokens []string, start int) (directory, subcommand string, 
 		switch {
 		case option == "-C":
 			if index+1 >= count {
-				return "", "", false
+				return nil, "", false
 			}
+			var directory string
 			directory, index = takeValue(tokens, index+1)
+			directories = append(directories, directory)
 		case strings.HasPrefix(option, "-C"):
 			var value string
 			value, index = takeValue(tokens, index)
-			directory = value[2:]
+			directories = append(directories, value[2:])
 		case strings.HasPrefix(option, "--git-dir") || strings.HasPrefix(option, "--work-tree"):
 			// 作業ツリーが cwd から外れるが、対象の特定までは踏み込まない。
-			return "", "", false
+			return nil, "", false
 		case option == "-c":
 			if index+1 < count {
 				// -c k=v の値を読み飛ばす。
@@ -446,10 +498,10 @@ func parseGitOptions(tokens []string, start int) (directory, subcommand string, 
 			}
 		case strings.HasPrefix(option, "-"):
 		default:
-			return directory, option, true
+			return directories, option, true
 		}
 	}
-	return directory, "", true
+	return directories, "", true
 }
 
 // snapshotResult は snapshot の結果である。

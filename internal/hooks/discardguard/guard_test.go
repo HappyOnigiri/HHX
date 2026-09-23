@@ -957,6 +957,79 @@ func TestResolveSameTargetTwiceIsListedOnce(t *testing.T) {
 	assertTargets(t, "git reset --hard && cd "+f.a+" && git clean -fd", f.a, f.a)
 }
 
+// 1 つの git に -C が複数あれば、git と同じく出現順に適用し、相対パスは直前の -C の先から辿る。
+// 移植元は最後の -C だけを cwd から解決していたので、cwd にも同じ名前のディレクトリがあると別のリポジトリを保存していた（意図して変えた点）。
+func TestResolveMultipleDashCAreApplied(t *testing.T) {
+	f := newResolveFixture(t)
+	sub := filepath.Join(f.a, "sub")
+	// cwd（b）にも sub があるが、対象は a/sub である。
+	mkdir(t, filepath.Join(f.b, "sub"))
+	assertTargets(t, "git -C "+f.a+" -C sub reset --hard", f.b, sub)
+	assertTargets(t, "git -C"+f.a+" -Csub clean -fd", f.b, sub)
+	assertTargets(t, "git -C sub -C .. reset --hard", f.a, f.a)
+	// 絶対パスの -C は、それより前の -C を打ち消す。
+	assertTargets(t, "git -C sub -C "+f.b+" reset --hard", f.a, f.b)
+	assertTargets(t, "cd "+f.a+" && git -C sub -C . reset --hard", f.b, sub)
+	// 途中の -C が解決できなければ、特定できないものとする。
+	for _, command := range []string{"git -C nope -C sub reset --hard", "git -C sub -C $X reset --hard"} {
+		if got, err := resolveTargetDirs(command, f.a); got != nil || err != nil {
+			t.Errorf("%q must be unresolved: %v, %v", command, got, err)
+		}
+	}
+}
+
+// ( ... ) と $( ... ) の中の cd は、閉じ括弧の後に残らない。
+// 移植元は括弧を空白として読んでいたので、閉じた後の破棄も cd の先を保存し、外側の変更を保存し損ねていた（意図して変えた点）。
+// 括弧はクォートや case の分岐を見分けずに数えるので、括弧を無視した作業ディレクトリ（移植元の意味）も候補に残す。
+func TestResolveCdInsideSubshellDoesNotLeak(t *testing.T) {
+	f := newResolveFixture(t)
+	sub := filepath.Join(f.a, "sub")
+	assertTargets(t, "(cd "+f.b+" && git reset --hard); git reset --hard", f.a, f.b, f.a)
+	assertTargets(t, "(cd "+f.b+"); git reset --hard", f.a, f.a, f.b)
+	assertTargets(t, "(cd "+f.b+")&&git clean -fd", f.a, f.a, f.b)
+	assertTargets(t, "x=$(cd "+f.b+" && pwd); git reset --hard", f.a, f.a, f.b)
+	// 入れ子のサブシェルは 1 段ずつ戻る。括弧を無視した側は最後の cd の先に留まる。
+	assertTargets(t, "(cd sub && (cd "+f.b+") && git reset --hard) && git clean -fd", f.a, sub, f.b, f.a)
+	// { ... } はサブシェルではないので、cd は残る。
+	assertTargets(t, "{ cd "+f.b+"; }; git reset --hard", f.a, f.b)
+	// 対応の無い閉じ括弧（case の分岐など）は無視する。
+	assertTargets(t, "case x in x) cd "+f.b+";; esac; git reset --hard", f.a, f.b)
+	// 破棄系の git をトークンとして拾えないときに保存する「最後の作業ディレクトリ」も、両方を候補にする。
+	assertTargets(t, "(cd "+f.b+"); echo 'git reset --hard'", f.a, f.a, f.b)
+}
+
+// サブシェルを閉じない括弧（クォートの中、case の分岐）で cd が取り消されても、実際に破棄する cd の先を保存する。
+func TestResolveParenthesesThatDoNotCloseASubshellKeepTheCdTarget(t *testing.T) {
+	f := newResolveFixture(t)
+	assertTargets(t, "(cd "+f.b+" && echo ':)' && git reset --hard)", f.a, f.a, f.b)
+	assertTargets(t, "(cd "+f.b+" && case x in x) echo;; esac && git reset --hard)", f.a, f.a, f.b)
+	assertTargets(t, "echo '(' && cd "+f.b+" && echo ')' && git reset --hard", f.a, f.a, f.b)
+	// 括弧を無視した側で cd の先が解決できなければ、特定できないものとして deny する。
+	if got, err := resolveTargetDirs("(cd sub); cd sub && git reset --hard", f.a); got != nil || err != nil {
+		t.Errorf("must be unresolved: %v, %v", got, err)
+	}
+}
+
+func TestTokenizeKeepsTokensAndRecordsParens(t *testing.T) {
+	tokens, parens := tokenize("(cd a&&git -C b reset)|x $(y) ((z))")
+	wantTokens := []string{"cd", "a", "git", "-C", "b", "reset", "x", "$", "y", "z"}
+	if !reflect.DeepEqual(tokens, wantTokens) {
+		t.Fatalf("tokens = %q", tokens)
+	}
+	want := map[int]string{0: "(", 6: ")", 8: "(", 9: ")(("}
+	for index := range tokens {
+		if got := string(parens[index]); got != want[index] {
+			t.Errorf("parens before %q = %q, want %q", tokens[index], got, want[index])
+		}
+	}
+	// 移植元のトークン（括弧を空白に置き換えて分けたもの）と同じ列になる。
+	command := "a(b)c{d}e;f&g|h　(i"
+	tokens, _ = tokenize(command)
+	if want := py.Fields(separatorRE.ReplaceAllString(command, " ")); !reflect.DeepEqual(tokens, want) {
+		t.Errorf("tokens = %q, want %q", tokens, want)
+	}
+}
+
 func TestHelpers(t *testing.T) {
 	if !isStaticPath("/tmp/a-b_c.d") {
 		t.Error("plain path must be static")
@@ -1201,6 +1274,47 @@ func TestSnapshotMultipleTargetsAreAllSaved(t *testing.T) {
 	}
 	if got := show(t, b, snapshotRef+":untracked.txt"); got != "new" {
 		t.Errorf("b = %q", got)
+	}
+}
+
+// git -C repoA -C sub は repoA/sub を保存する。cwd の側の sub（別のリポジトリ）には作らない。
+func TestSnapshotMultipleDashCSavesTheRealTarget(t *testing.T) {
+	base := tempDir(t)
+	repoA := makeRepo(t, filepath.Join(base, "repoA"), repoOptions{})
+	inner := makeRepo(t, filepath.Join(repoA, "sub"), repoOptions{})
+	decoy := makeRepo(t, filepath.Join(base, "sub"), repoOptions{})
+	expectPass(t, "git -C repoA -C sub reset --hard", base)
+	if got := show(t, inner, snapshotRef+":tracked.txt"); got != "v2-uncommitted" {
+		t.Errorf("repoA/sub tracked.txt = %q", got)
+	}
+	if refExists(decoy, snapshotRef) || refExists(repoA, snapshotRef) {
+		t.Error("only repoA/sub must be saved")
+	}
+}
+
+// (cd repoB && ...); git reset --hard は、サブシェルの外の cwd も保存する。
+// 括弧を無視した作業ディレクトリ（repoB）も候補に残すので、repoB も保存する（余分に保存しても害はない）。
+func TestSnapshotSubshellCdDoesNotHideTheOuterRepo(t *testing.T) {
+	base := tempDir(t)
+	a := makeRepo(t, filepath.Join(base, "a"), repoOptions{})
+	b := makeRepo(t, filepath.Join(base, "b"), repoOptions{})
+	expectPass(t, "(cd "+b+" && git status); git reset --hard", a)
+	if got := show(t, a, snapshotRef+":tracked.txt"); got != "v2-uncommitted" {
+		t.Errorf("a tracked.txt = %q", got)
+	}
+	if got := show(t, b, snapshotRef+":tracked.txt"); got != "v2-uncommitted" {
+		t.Errorf("b tracked.txt = %q", got)
+	}
+}
+
+// クォートの中の閉じ括弧はサブシェルを閉じないので、実際に破棄される cd の先を保存する。
+func TestSnapshotQuotedParenthesisKeepsTheCdTarget(t *testing.T) {
+	base := tempDir(t)
+	a := makeRepo(t, filepath.Join(base, "a"), repoOptions{})
+	b := makeRepo(t, filepath.Join(base, "b"), repoOptions{})
+	expectPass(t, "(cd "+b+" && echo ':)' && git reset --hard)", a)
+	if got := show(t, b, snapshotRef+":tracked.txt"); got != "v2-uncommitted" {
+		t.Errorf("b tracked.txt = %q", got)
 	}
 }
 

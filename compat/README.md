@@ -26,6 +26,8 @@ HHX_COMPAT_TARGET=python HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレク�
 Unicode の空白や語の文字など）を差し込んだ変形である。`HHX_DIFF_SEED` で乱数の種を、`HHX_DIFF_CASES` で変形の数を変えられる。
 意図して仕様を変えた入力（irreversible-guard の G 類の旧保護対象と hhx 自身のパス）は比べない。
 discard-guard は、Python 本体（worktree-guard.py）のブランチ attach の判定を無効にして比べ、理由文で意図して変えた 1 文は置き換えてから比べる。
+snapshot の対象の特定で意図して変えた 2 点（`( ... )` の中の cd を閉じ括弧で取り消す、1 つの git の複数の `-C` を順に適用する）に
+当たりうる入力も比べない。Python 本体は別のリポジトリを保存して通すので、データを守ることを優先して直した（AGENTS.md の「hook の移植の型」）。
 snapshot は両方が本物の git でサンドボックスのリポジトリに作るので、同じ一時 index の lock で競合しないよう hhx も 1 件ずつ起動する。
 
 ```sh

@@ -35,7 +35,8 @@ func Run(definition *Definition, invocation Invocation) {
 	if !ok {
 		return
 	}
-	if definition.Gate != nil && !definition.Gate(input) {
+	gated := definition.Gate != nil && (!fromArgs || !definition.GateStdinOnly)
+	if gated && !definition.Gate(input) {
 		return
 	}
 	cfg := &config.Config{}
