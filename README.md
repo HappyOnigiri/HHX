@@ -1,19 +1,22 @@
-# hhx
+# Happy Hooks
 
 English | [日本語](README.ja.md)
 
-`hhx` is a single Go binary that provides agent hooks for Claude Code and Codex.
-Each hook is registered as its own entry, `hhx hook <name>`, so a slow hook never delays the others.
+Happy Hooks helps Claude Code and Codex stay on track during long-running tasks. It bundles its hooks in a single Go binary called `hhx`.
 
-Hooks inspect commands statically. They catch common mistakes; they are not a security boundary.
+- Prevent avoidable confirmation prompts from leaving the agent waiting for a user.
+- Guide the agent through waits, such as waiting for CI, without repeated tool calls.
+- Supply relevant context about pull requests and the working environment when the agent needs it.
+
+Command guards inspect commands statically. They catch common mistakes; they are not a security boundary.
 
 ## Install
 
-hhx is distributed for macOS on Apple Silicon.
+Happy Hooks is distributed for macOS on Apple Silicon.
 
 ```sh
-curl -fsSL https://github.com/HappyOnigiri/HHX/releases/latest/download/install.sh | bash
-hhx install         # registers hhx hooks in ~/.claude/settings.json and ~/.codex/hooks.json
+curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/install.sh | bash
+hhx install         # registers hooks in ~/.claude/settings.json and ~/.codex/hooks.json
 ```
 
 The installer places the binary at `~/.local/bin/hhx` after verifying its checksum; it never registers hooks by itself.
@@ -22,9 +25,9 @@ To build from source instead, run `make install` (it builds `bin/hhx` and copies
 `hhx install` writes only its own hook groups and leaves every other hook untouched.
 It is idempotent: running it again without changes does not modify the files.
 By default it configures each agent whose config directory (`~/.claude`, `~/.codex`) exists; pass `--agent claude` or `--agent codex` to choose.
-hhx always writes Claude's user settings (`~/.claude/settings.json`), even when `~/.claude/settings.local.json` exists.
+Happy Hooks always writes Claude's user settings (`~/.claude/settings.json`), even when `~/.claude/settings.local.json` exists.
 
-`hhx uninstall` removes only the entries hhx wrote.
+`hhx uninstall` removes only the entries Happy Hooks wrote.
 
 ## Update
 
@@ -33,13 +36,13 @@ hhx update          # checks GitHub Releases for a newer version
 hhx update --apply  # installs it with the installer of that release
 ```
 
-hhx checks for updates only when you run `hhx update`; hooks never access the network for it.
+Happy Hooks checks for updates only when you run `hhx update`; hooks never access the network for it.
 Development builds (`make install`) do not update themselves.
 
 ## Uninstall
 
 ```sh
-curl -fsSL https://github.com/HappyOnigiri/HHX/releases/latest/download/uninstall.sh | bash
+curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/uninstall.sh | bash
 ```
 
 It runs `hhx uninstall` and then removes `~/.local/bin/hhx`.
@@ -56,8 +59,8 @@ hooks:
     enabled: false
 ```
 
-`language` selects the language of everything hhx writes: denial reasons, the context it injects, and the output of the `hhx` commands.
-Without it, or with any value other than `en` or `ja`, hhx uses English; `hhx install` reports an invalid value.
+`language` selects the language of everything Happy Hooks writes: denial reasons, the context it injects, and the output of the `hhx` commands.
+Without it, or with any value other than `en` or `ja`, Happy Hooks uses English; `hhx install` reports an invalid value.
 Machine-readable parts stay the same in every language: JSON keys, the tags and field names of injected context,
 and the `wait-ci:` prefix, the last line, and the exit codes of `hhx wait-ci`.
 
@@ -73,7 +76,7 @@ A missing or broken file never stops a hook: hooks fall back to their defaults.
 | `discard-guard` | on | Nothing by itself. Before a Git command that discards uncommitted changes, it saves a snapshot of the working tree (see below); it denies the command only when it cannot tell which repository is affected or cannot save the snapshot |
 | `idle-wait-guard` | on | Commands that do nothing but wait or print literals (`sleep 600`, `echo ok`), which agents use to fill turns while waiting |
 | `forbidden-term-guard` | on | Sending a PR or issue body that contains a term from the repository's list (see [docs/forbidden-terms.md](docs/forbidden-terms.md)) |
-| `irreversible-guard` | on | Operations nobody can undo: revoking or deleting credentials, publishing to package registries (unless `--dry-run`), deleting remote resources, destroying Git objects, erasing disks or backups, writing to secret files (`.env*`, `~/.ssh`, `*.pem`) from any tool, and deleting or moving hhx itself, `~/.config/hhx`, or the files that register the hooks |
+| `irreversible-guard` | on | Operations nobody can undo: revoking or deleting credentials, publishing to package registries (unless `--dry-run`), deleting remote resources, destroying Git objects, erasing disks or backups, writing to secret files (`.env*`, `~/.ssh`, `*.pem`) from any tool, and deleting or moving the `hhx` binary, `~/.config/hhx`, or the files that register the hooks |
 | `dangerous-rm-guard` | on (Claude Code only) | The `rm` / `rmdir` forms that Claude Code's built-in check would stop with a confirmation prompt that no permission setting can skip: paths that start with a possibly empty variable, targets that cannot be resolved statically, critical directories, and the working directory or its ancestors |
 | `exit-plan-subagent-guard` | on (Claude Code only) | Leaving plan mode (`ExitPlanMode`) while an agent started in the background has not returned its result yet. It passes once the agent finishes or is stopped |
 | `git-hookspath-guard` | off | Changing `core.hooksPath`, and editing Git config files such as `.git/config` directly |
@@ -97,7 +100,7 @@ hooks:
 
 `pr-body-staleness` tells the agent to update the body with the `update-pr` skill.
 Replace that sentence with your own way of updating a pull request body.
-hhx uses it as written in every language, adding a closing `.` (or `。` with `language: ja`) when it has no sentence-ending mark:
+Happy Hooks uses it as written in every language, adding a closing `.` (or `。` with `language: ja`) when it has no sentence-ending mark:
 
 ```yaml
 hooks:

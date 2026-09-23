@@ -1,30 +1,33 @@
-# hhx
+# Happy Hooks
 
 [English](README.md) | 日本語
 
-`hhx` は、Claude Code と Codex の agent hook を 1 つの Go のバイナリで提供します。
-hook は 1 本ずつ別のエントリ（`hhx hook <name>`）として登録するので、遅い hook が他の hook を待たせません。
+Happy Hooks は、Claude Code と Codex が長時間の作業を滞りなく進めるための hook 集です。`hhx` という 1 つの Go バイナリで動作します。
 
-hook はコマンドを静的に検査します。よくある誤りを止めるためのもので、セキュリティ境界ではありません。
+- 不要な確認プロンプトによって、エージェントがユーザー待ちで止まるのを防ぎます。
+- CI の完了待ちなどで適切な待機方法を案内し、ツールの繰り返し呼び出しを減らします。
+- PR や作業環境に関する情報を必要な場面で渡し、エージェントの判断を助けます。
+
+コマンドを検査する hook は、静的な判定でよくある誤りを止めます。セキュリティ境界ではありません。
 
 ## インストール
 
-hhx は Apple Silicon の macOS 向けに配布しています。
+Happy Hooks は Apple Silicon の macOS 向けに配布しています。
 
 ```sh
-curl -fsSL https://github.com/HappyOnigiri/HHX/releases/latest/download/install.sh | bash
-hhx install         # hhx の hook を ~/.claude/settings.json と ~/.codex/hooks.json に登録する
+curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/install.sh | bash
+hhx install         # Happy Hooks の hook を ~/.claude/settings.json と ~/.codex/hooks.json に登録する
 ```
 
 インストーラーはチェックサムを確かめてからバイナリを `~/.local/bin/hhx` に置きます。hook の登録はしません。
 ソースからビルドするときは `make install` を実行します（`bin/hhx` をビルドして `~/.local/bin/hhx` にコピーします）。
 
-`hhx install` は hhx 自身の hook のグループだけを書き、他の hook には触れません。
+`hhx install` は Happy Hooks 自身の hook のグループだけを書き、他の hook には触れません。
 冪等なので、変更が無ければもう一度実行してもファイルを変えません。
 既定では、設定ディレクトリ（`~/.claude`、`~/.codex`）のある agent をそれぞれ設定します。選ぶときは `--agent claude` か `--agent codex` を渡します。
-`~/.claude/settings.local.json` があっても、hhx は常に Claude のユーザー設定（`~/.claude/settings.json`）に書きます。
+`~/.claude/settings.local.json` があっても、Happy Hooks は常に Claude のユーザー設定（`~/.claude/settings.json`）に書きます。
 
-`hhx uninstall` は hhx が書いたエントリだけを外します。
+`hhx uninstall` は Happy Hooks が書いたエントリだけを外します。
 
 ## 更新
 
@@ -39,7 +42,7 @@ hhx update --apply  # その版のインストーラーで入れる
 ## アンインストール
 
 ```sh
-curl -fsSL https://github.com/HappyOnigiri/HHX/releases/latest/download/uninstall.sh | bash
+curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/uninstall.sh | bash
 ```
 
 `hhx uninstall` を実行してから `~/.local/bin/hhx` を消します。
@@ -56,7 +59,7 @@ hooks:
     enabled: false
 ```
 
-`language` は、hhx が書くものすべての言語を選びます。deny の理由文、注入するコンテキスト、`hhx` のコマンドの出力が対象です。
+`language` は、Happy Hooks が書くものすべての言語を選びます。deny の理由文、注入するコンテキスト、`hhx` のコマンドの出力が対象です。
 指定が無いとき、または `en`・`ja` 以外の値のときは英語になり、不正な値は `hhx install` が報告します。
 機械が読む部分はどの言語でも同じです。JSON のキー、注入するコンテキストのタグと項目名、
 `hhx wait-ci` の接頭辞 `wait-ci:`・最終行・終了コードは変わりません。
@@ -73,7 +76,7 @@ hooks:
 | `discard-guard` | 有効 | それ自体では何も拒否しない。未コミットの変更を破棄する Git のコマンドの前に、作業ツリーの snapshot を保存する（下記）。対象のリポジトリを特定できないときと、snapshot を保存できないときだけ拒否する |
 | `idle-wait-guard` | 有効 | 待つかリテラルを出すだけのコマンド（`sleep 600`、`echo ok`）。agent が待ちのあいだターンを埋めるのに使う |
 | `forbidden-term-guard` | 有効 | リポジトリのリストにある語を含む PR や issue の本文の送信（[docs/forbidden-terms.md](docs/forbidden-terms.md)） |
-| `irreversible-guard` | 有効 | 誰にも元に戻せない操作。資格情報の失効・削除、パッケージのレジストリへの公開（`--dry-run` を除く）、リモートのリソースの削除、Git のオブジェクトの破壊、ディスクやバックアップの消去、どのツールからでも秘密ファイル（`.env*`、`~/.ssh`、`*.pem`）への書き込み、hhx 自身・`~/.config/hhx`・hook を登録するファイルの削除や移動 |
+| `irreversible-guard` | 有効 | 誰にも元に戻せない操作。資格情報の失効・削除、パッケージのレジストリへの公開（`--dry-run` を除く）、リモートのリソースの削除、Git のオブジェクトの破壊、ディスクやバックアップの消去、どのツールからでも秘密ファイル（`.env*`、`~/.ssh`、`*.pem`）への書き込み、`hhx` バイナリ・`~/.config/hhx`・hook を登録するファイルの削除や移動 |
 | `dangerous-rm-guard` | 有効（Claude Code だけ） | Claude Code の組み込みの検査が、どの権限設定でも飛ばせない確認で止める `rm` / `rmdir` の形。空になりうる変数で始まるパス、静的に解決できない対象、重要なディレクトリ、作業ディレクトリとその祖先 |
 | `exit-plan-subagent-guard` | 有効（Claude Code だけ） | バックグラウンドで起動した agent の結果が返る前の、プランモードの終了（`ExitPlanMode`）。agent が終わるか止めれば通す |
 | `git-hookspath-guard` | 無効 | `core.hooksPath` の変更と、`.git/config` などの Git の設定ファイルの直接の編集 |
