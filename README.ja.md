@@ -16,18 +16,18 @@ Happy Hooks は、Claude Code と Codex が長時間の作業を滞りなく進�
 
 | hook | 役割 | 既定 |
 | --- | --- | --- |
-| `pr-merge-guard` | エージェントによる PR のマージを止める | 有効 |
-| `discard-guard` | Git で変更を破棄する前に snapshot を保存する | 有効 |
-| `idle-wait-guard` | 時間を埋めるだけのコマンドを止める | 有効 |
-| `forbidden-term-guard` | PR・issue の本文に設定済みの禁止語があれば止める | 有効 |
-| `irreversible-guard` | 元に戻せない操作を止める | 有効 |
-| `dangerous-rm-guard` | Claude Code の確認待ちになる危険な `rm` を先に止める | 有効（Claude Code） |
-| `exit-plan-subagent-guard` | バックグラウンドのエージェントが終わるまでプランモードを維持する | 有効（Claude Code） |
-| `git-hookspath-guard` | Git の hook 設定の変更を止める | 無効 |
-| `pr-context` | プロンプト中の PR の情報を注入する | 有効 |
-| `push-ci-context` | push 後に CI の待ち方を案内する | 有効 |
-| `pr-body-staleness` | PR の本文が古い可能性を知らせる | 有効 |
-| `agents-local-context` | 適用される `AGENTS.local.md` の指示を注入する | 有効（Codex） |
+| [`pr-merge-guard`](docs/hooks/pr-merge-guard.ja.md) | エージェントによる PR のマージを止める | 有効 |
+| [`discard-guard`](docs/hooks/discard-guard.ja.md) | Git で変更を破棄する前に snapshot を保存する | 有効 |
+| [`idle-wait-guard`](docs/hooks/idle-wait-guard.ja.md) | 時間を埋めるだけのコマンドを止める | 有効 |
+| [`forbidden-term-guard`](docs/hooks/forbidden-term-guard.ja.md) | PR・issue の本文に設定済みの禁止語があれば止める | 有効 |
+| [`irreversible-guard`](docs/hooks/irreversible-guard.ja.md) | 元に戻せない操作を止める | 有効 |
+| [`dangerous-rm-guard`](docs/hooks/dangerous-rm-guard.ja.md) | Claude Code の確認待ちになる危険な `rm` を先に止める | 有効（Claude Code） |
+| [`exit-plan-subagent-guard`](docs/hooks/exit-plan-subagent-guard.ja.md) | バックグラウンドのエージェントが終わるまでプランモードを維持する | 有効（Claude Code） |
+| [`git-hookspath-guard`](docs/hooks/git-hookspath-guard.ja.md) | Git の hook 設定の変更を止める | 無効 |
+| [`pr-context`](docs/hooks/pr-context.ja.md) | プロンプト中の PR の情報を注入する | 有効 |
+| [`push-ci-context`](docs/hooks/push-ci-context.ja.md) | push 後に CI の待ち方を案内する | 有効 |
+| [`pr-body-staleness`](docs/hooks/pr-body-staleness.ja.md) | PR の本文が古い可能性を知らせる | 有効 |
+| [`agents-local-context`](docs/hooks/agents-local-context.ja.md) | 適用される `AGENTS.local.md` の指示を注入する | 有効（Codex） |
 
 ## インストール
 

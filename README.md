@@ -16,18 +16,18 @@ Command guards inspect text statically. They catch common mistakes, but are not 
 
 | Hook | What it does | Default |
 | --- | --- | --- |
-| `pr-merge-guard` | Stops agents from merging PRs | On |
-| `discard-guard` | Saves a snapshot before Git commands discard changes | On |
-| `idle-wait-guard` | Stops commands used only to fill time | On |
-| `forbidden-term-guard` | Blocks configured terms in PR and issue bodies | On |
-| `irreversible-guard` | Blocks irreversible operations | On |
-| `dangerous-rm-guard` | Stops risky `rm` commands before Claude Code asks for confirmation | On (Claude Code) |
-| `exit-plan-subagent-guard` | Keeps plan mode open until background agents finish | On (Claude Code) |
-| `git-hookspath-guard` | Blocks changes to Git hook settings | Off |
-| `pr-context` | Adds context about PR links in prompts | On |
-| `push-ci-context` | Explains how to wait for CI after a push | On |
-| `pr-body-staleness` | Flags PR descriptions that may be out of date | On |
-| `agents-local-context` | Adds applicable `AGENTS.local.md` instructions | On (Codex) |
+| [`pr-merge-guard`](docs/hooks/pr-merge-guard.md) | Stops agents from merging PRs | On |
+| [`discard-guard`](docs/hooks/discard-guard.md) | Saves a snapshot before Git commands discard changes | On |
+| [`idle-wait-guard`](docs/hooks/idle-wait-guard.md) | Stops commands used only to fill time | On |
+| [`forbidden-term-guard`](docs/hooks/forbidden-term-guard.md) | Blocks configured terms in PR and issue bodies | On |
+| [`irreversible-guard`](docs/hooks/irreversible-guard.md) | Blocks irreversible operations | On |
+| [`dangerous-rm-guard`](docs/hooks/dangerous-rm-guard.md) | Stops risky `rm` commands before Claude Code asks for confirmation | On (Claude Code) |
+| [`exit-plan-subagent-guard`](docs/hooks/exit-plan-subagent-guard.md) | Keeps plan mode open until background agents finish | On (Claude Code) |
+| [`git-hookspath-guard`](docs/hooks/git-hookspath-guard.md) | Blocks changes to Git hook settings | Off |
+| [`pr-context`](docs/hooks/pr-context.md) | Adds context about PR links in prompts | On |
+| [`push-ci-context`](docs/hooks/push-ci-context.md) | Explains how to wait for CI after a push | On |
+| [`pr-body-staleness`](docs/hooks/pr-body-staleness.md) | Flags PR descriptions that may be out of date | On |
+| [`agents-local-context`](docs/hooks/agents-local-context.md) | Adds applicable `AGENTS.local.md` instructions | On (Codex) |
 
 ## Install
 
