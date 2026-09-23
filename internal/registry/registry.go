@@ -4,9 +4,11 @@ package registry
 
 import (
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	"github.com/HappyOnigiri/hhx/internal/hooks/dangerousrmguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/forbiddentermguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/githookspathguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/idlewaitguard"
+	"github.com/HappyOnigiri/hhx/internal/hooks/irreversibleguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/prmergeguard"
 )
 
@@ -16,6 +18,8 @@ import (
 var definitions = []hookrt.Definition{
 	prmergeguard.Definition(),
 	githookspathguard.Definition(),
+	irreversibleguard.Definition(),
+	dangerousrmguard.Definition(),
 	forbiddentermguard.Definition(),
 	idlewaitguard.Definition(),
 }

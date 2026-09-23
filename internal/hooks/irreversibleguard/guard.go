@@ -1,0 +1,889 @@
+// Package irreversibleguard は、実行するとユーザーにも元に戻せない操作と、秘密ファイルへの直接書き込みを
+// PreToolUse で拒否する hook（irreversible-guard）である。
+//
+// 対象:
+//
+//	A. 資格情報の失効・削除 (トークン revoke、GitHub Secret、Keychain、IAM キー …)
+//	B. レジストリへの公開・取り下げ (npm publish / gem push / twine upload …)
+//	C. リモートリソースの恒久削除 (gh repo delete、terraform destroy、DROP TABLE …)
+//	D. Git オブジェクトの物理破壊 (reflog expire / gc --prune=now / stash clear)
+//	E. マシン上の不可逆消去 (diskutil erase* / tmutil delete)
+//	F. Git 管理外の秘密ファイルへの書き込み・破壊 (.envrc / .env* / envrc.local / ~/.ssh / *.pem)
+//	G. ガード自体の削除 (hhx の実行ファイル、~/.config/hhx、Claude の settings*.json、Codex の hooks.json と config.toml)
+//
+// 方針:
+//   - force push・リモートブランチ削除のような「履歴から復元できる」操作は対象外。
+//   - 判定は deny のみ（Codex は ask を解釈しない）。承認された操作はユーザー自身が実行する運用。
+//   - F は Bash だけでなく Edit / Write / apply_patch にも当てる。新規作成を含め、秘密ファイルへの直接書き込みは許可しない。
+//   - G は削除・移動だけを塞ぐ。編集は通常のメンテナンスなので許可する。
+//   - publish 系は --dry-run が付いていれば許可する。
+//   - 変数展開・eval・別シェル経由の明示的な回避は対象外（README の既知の限界）。
+//
+// 規則は上から順に評価し、最初に一致したもので拒否する。
+// JSON として読めない入力は fail-open にせず、生の文字列を Bash のコマンドとして判定する。
+package irreversibleguard
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	py "github.com/HappyOnigiri/hhx/internal/pycompat"
+)
+
+// Name は hook の名前である。
+const Name = "irreversible-guard"
+
+// Definition は irreversible-guard の定義を返す。
+func Definition() hookrt.Definition {
+	return hookrt.Definition{
+		Name:           Name,
+		DefaultEnabled: true,
+		Registrations: []hookrt.Registration{
+			{Agent: hookrt.Claude, Event: "PreToolUse", Matcher: "Bash"},
+			{Agent: hookrt.Claude, Event: "PreToolUse", Matcher: "Edit|Write|MultiEdit|NotebookEdit"},
+			{Agent: hookrt.Codex, Event: "PreToolUse", Matcher: "Bash"},
+			{Agent: hookrt.Codex, Event: "PreToolUse", Matcher: "^(apply_patch|Edit|Write)$"},
+		},
+		Gate: gate,
+		Run:  run,
+	}
+}
+
+// gateKeywords は一次ゲートの語である。これを含まない入力は判定しない。
+// G 類の保護対象に合わせ、移植元の agent-config を外して hhx を足してある。
+var gateKeywords = []string{
+	"gh", "git", "curl", "wget", "security", "gcloud", "aws", "npm", "yarn",
+	"gem", "twine", "cargo", "psql", "mysql", "mariadb", "sqlite3",
+	"terraform", "tofu", "diskutil", "tmutil", "gpg", "op ", "revoke",
+	".env", "envrc", ".ssh", ".pem", ".claude", ".codex", "hhx",
+}
+
+func gate(input []byte) bool {
+	raw := string(input)
+	for _, keyword := range gateKeywords {
+		if strings.Contains(raw, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func run(c *hookrt.Context) error {
+	if c.FromArgs {
+		// デバッグ経路: 引数のコマンド文字列を直接判定する。
+		evaluate(c, string(c.Input))
+		return nil
+	}
+	payload, ok := decodeObject(c.Input)
+	if !ok {
+		// object として読めない入力は fail-open にせず、生の文字列のまま判定に回す。
+		evaluate(c, string(c.Input))
+		return nil
+	}
+	var toolName string
+	_ = json.Unmarshal(payload["tool_name"], &toolName)
+	toolInput, ok := decodeMap(payload["tool_input"])
+	if !ok {
+		return nil
+	}
+	// tool_name が無い・空・文字列でないときは Bash として扱う（移植元の `tool_name or "Bash"`）。
+	switch toolName {
+	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+		path := firstTruthy(toolInput["file_path"], toolInput["notebook_path"])
+		if label := secretPathLabel(path); label != "" {
+			c.Deny(reason(withToken(targetSecretEdit, label), whySecret))
+		}
+	case "apply_patch":
+		if label := patchedSecretLabel(payload["tool_input"]); label != "" {
+			c.Deny(reason(withToken(targetSecretPatch, label), whySecret))
+		}
+	default:
+		// 文字列でない command は判定しない（移植元の isinstance の検査）。
+		command, _ := toolInput["command"].(string)
+		evaluate(c, command)
+	}
+	return nil
+}
+
+// decodeObject は JSON の object を、値を解釈せずに読む。object でなければ偽を返す。
+func decodeObject(raw []byte) (map[string]json.RawMessage, bool) {
+	var object map[string]json.RawMessage
+	err := json.Unmarshal(raw, &object)
+	return object, err == nil && object != nil
+}
+
+// decodeMap は JSON の object を読む。object でなければ（null を含む）偽を返す。
+func decodeMap(raw json.RawMessage) (map[string]any, bool) {
+	var object map[string]any
+	err := json.Unmarshal(raw, &object)
+	return object, err == nil && object != nil
+}
+
+// evaluate は Bash のコマンド文字列を判定し、拒否するなら出力する。
+func evaluate(c *hookrt.Context, command string) {
+	if target, why := analyzeCommand(command); target != "" {
+		c.Deny(reason(target, why))
+	}
+}
+
+// firstTruthy は Python の `a or b or ""` と同じく、偽でない最初の値を返す。
+func firstTruthy(values ...any) any {
+	for _, value := range values {
+		if truthy(value) {
+			return value
+		}
+	}
+	return ""
+}
+
+func truthy(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case float64:
+		return typed != 0
+	case string:
+		return typed != ""
+	case []any:
+		return len(typed) > 0
+	case map[string]any:
+		return len(typed) > 0
+	default:
+		return true
+	}
+}
+
+const (
+	sp = py.Space
+	// rtk ラッパー経由の呼び出しも同じ扱いにする。
+	rtk = `(?:rtk` + sp + `+)?`
+	// 同じコマンドの中（パイプ・コマンド区切りを越えない）。
+	seg      = `[^|;&]*`
+	boundary = `(?:^|[` + py.SpaceChars + `;&|(])`
+	// commandStart は F・G 類のコマンド名の前の境界（行頭・空白・開き括弧）である。
+	commandStart = `(?:^|[` + py.SpaceChars + `(])`
+	pathPrefix   = `(?:` + py.NotSpace + `*/)?`
+
+	ghCommand  = boundary + rtk + pathPrefix + `gh` + sp + `+`
+	gitCommand = boundary + rtk + pathPrefix + `git` + sp + `+`
+	httpClient = boundary + `(?:curl|wget)(?:` + sp + `|$)`
+
+	// wordEnd は語の文字の直後の \b である。パターンの末尾にだけ置く（1 文字を消費する）。
+	wordEnd = py.NotWordOrEnd
+	// segWord は、空白の直後に置いた `{SEG}\b` を語の文字の前で展開したものである。
+	// \b の直前の文字は、SEG が空なら直前の空白（語の文字ではない）、空でなければ SEG の最後の文字になるので、
+	// 「SEG が空」か「SEG が語の文字でない文字で終わる」の 2 通りに等しい。
+	segWord = `(?:` + seg + `[^|;&` + py.WordChars + `])?`
+	// dashOptions は `(?:-\S+\s+)*`（ハイフンで始まる引数の並び）である。
+	dashOptions = `(?:-` + py.NotSpace + `+` + sp + `+)*`
+)
+
+// rule は 1 つの規則である。pattern が正規化したコマンドのどこかに一致すれば、target を表記にして拒否する。
+type rule struct {
+	pattern *regexp.Regexp
+	target  string
+	why     string
+}
+
+func newRule(pattern, target, why string) rule {
+	return rule{pattern: regexp.MustCompile(pattern), target: target, why: why}
+}
+
+// commandRules は A・C・D・E 類の規則である。移植元の COMMAND_RULES と同じ順に並べる。
+var commandRules = []rule{
+	// --- A. 資格情報の失効・削除 ---
+	newRule(httpClient+seg+`credentials/revoke`, "GitHub Credential Revocation API", whyCred),
+	newRule(httpClient+seg+`https?://[^`+py.SpaceChars+`|;&]*revoke`,
+		"失効 (revoke) エンドポイントへの HTTP リクエスト", whyCred),
+	newRule(ghCommand+`api`+seg+`revoke`, "gh api の失効 (revoke) エンドポイント", whyCred),
+	newRule(ghCommand+`auth`+sp+`+logout`+wordEnd, "gh auth logout", whyCred),
+	newRule(ghCommand+`(?:secret|variable|ssh-key|gpg-key)`+sp+`+delete`+wordEnd,
+		"GitHub 上の Secret・鍵の削除 (値は読み返せない)", whyCred),
+	newRule(ghCommand+`repo`+sp+`+deploy-key`+sp+`+delete`+wordEnd, "GitHub 上の Deploy Key の削除", whyCred),
+	newRule(boundary+pathPrefix+`security`+sp+`+`+dashOptions+`delete-`+py.Word,
+		"Keychain の削除 (security delete-*)", whyCred),
+	newRule(boundary+pathPrefix+`gcloud`+sp+segWord+`revoke`+wordEnd, "gcloud の認証失効", whyCred),
+	newRule(boundary+`npm`+sp+`+token`+sp+`+revoke`+wordEnd, "npm token revoke", whyCred),
+	newRule(boundary+`gpg2?`+sp+seg+`--delete-secret-key`, "GPG 秘密鍵の削除", whyCred),
+	newRule(boundary+`op`+sp+`+item`+sp+`+delete`+wordEnd, "1Password アイテムの削除", whyCred),
+	newRule(`--force-delete-without-recovery`, "AWS Secrets Manager の即時完全削除", whyCred),
+	// --- C. リモートリソースの恒久削除 ---
+	newRule(ghCommand+`(?:repo|release|gist)`+sp+`+delete`+wordEnd, "gh の恒久削除 (repo/release/gist)", whyRemote),
+	newRule(ghCommand+`api`+seg+`-X`+sp+`+(?i:DELETE)`+wordEnd, "gh api の DELETE", whyRemote),
+	newRule(boundary+pathPrefix+`gcloud`+sp+segWord+`delete`+wordEnd, "gcloud の削除操作", whyRemote),
+	newRule(boundary+pathPrefix+`aws`+sp+segWord+`delete-`+py.Word, "aws の削除操作 (delete-*)", whyRemote),
+	newRule(boundary+pathPrefix+`aws`+sp+`+s3`+sp+`+(?:rb|rm)`+wordEnd, "aws s3 のオブジェクト・バケット削除", whyRemote),
+	newRule(boundary+pathPrefix+`(?:terraform|tofu)`+sp+`+`+dashOptions+`destroy`+wordEnd, "terraform destroy", whyRemote),
+	newRule(boundary+pathPrefix+`(?:terraform|tofu)`+sp+`+`+dashOptions+`apply`+sp+seg+`-destroy`+wordEnd,
+		"terraform apply -destroy", whyRemote),
+	newRule(boundary+pathPrefix+`mysqladmin`+sp+segWord+`drop`+wordEnd, "mysqladmin drop", whyRemote),
+	// --- D. Git オブジェクトの物理破壊 ---
+	newRule(gitCommand+segWord+`reflog`+sp+`+expire`+wordEnd, "git reflog expire", whyGit),
+	// `\bgc\b{SEG}--prune`: gc の直後の \b は、SEG が空なら次の - で、空でなければ SEG の先頭の文字で成り立つ。
+	newRule(gitCommand+segWord+`gc(?:[^|;&`+py.WordChars+`]`+seg+`)?--prune=(?:now|all)`+wordEnd,
+		"git gc --prune=now", whyGit),
+	newRule(gitCommand+segWord+`stash`+sp+`+clear`+wordEnd, "git stash clear", whyGit),
+	// --- E. マシン上の不可逆消去 ---
+	newRule(boundary+pathPrefix+`diskutil`+sp+segWord+`(?:erase`+py.Word+`*|partitionDisk|zeroDisk|reformat)`+wordEnd,
+		"diskutil によるディスク消去", whyMachine),
+	newRule(boundary+pathPrefix+`diskutil`+sp+`+apfs`+sp+`+delete`+py.Word+`*`, "diskutil apfs delete*", whyMachine),
+	newRule(boundary+pathPrefix+`tmutil`+sp+`+delete`+wordEnd, "Time Machine バックアップの削除", whyMachine),
+}
+
+// publishRules は B 類（--dry-run が付いていれば許可する公開系）の規則である。
+var publishRules = []rule{
+	newRule(boundary+pathPrefix+`(?:npm|pnpm)`+sp+`+(?:publish|unpublish|deprecate)`+wordEnd,
+		"npm レジストリへの公開・取り下げ", whyPublish),
+	newRule(boundary+pathPrefix+`yarn`+sp+`+(?:npm`+sp+`+)?publish`+wordEnd, "npm レジストリへの公開 (yarn)", whyPublish),
+	newRule(boundary+pathPrefix+`gem`+sp+`+(?:push|yank)`+wordEnd, "RubyGems への公開・取り下げ", whyPublish),
+	newRule(boundary+`twine`+sp+`+upload`+wordEnd, "PyPI への公開 (twine upload)", whyPublish),
+	newRule(boundary+pathPrefix+`cargo`+sp+`+(?:publish|yank)`+wordEnd, "crates.io への公開・取り下げ", whyPublish),
+}
+
+var (
+	// 二次ゲート: 語の境界つきで判定し直す（"legit" の git を拾わない）。境界は移植元と同じく ASCII で見る。
+	secondGateWords = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(?:git|gh|curl|wget|security|gcloud|aws|npm|pnpm|` +
+		`yarn|gem|twine|cargo|psql|mysql|mariadb|mysqladmin|sqlite3|terraform|tofu|diskutil|tmutil|` +
+		`rm|mv|unlink|shred|srm|trash|truncate|sed|perl|tee|gpg|gpg2|op)(?:[^A-Za-z0-9_]|$)`)
+	secondGatePaths = regexp.MustCompile(`\.env|envrc|\.ssh|\.pem|\.claude/|\.codex/`)
+
+	methodFlagRE = regexp.MustCompile(`--method[=` + py.SpaceChars + `]+`)
+	joinedXFlag  = regexp.MustCompile(`(^|` + sp + `)-X([A-Za-z]+)`)
+
+	deleteMethodRE = regexp.MustCompile(`-X` + sp + `+(?i:DELETE)` + wordEnd)
+	cloudHostRE    = regexp.MustCompile(`api\.github\.com|googleapis\.com|amazonaws\.com`)
+	httpClientRE   = regexp.MustCompile(httpClient)
+	dbClientRE     = regexp.MustCompile(boundary + pathPrefix + `(?:psql|mysql|mariadb|sqlite3)(?:` + sp + `|$)`)
+	// 先頭の \b は語の文字 D・T の直前にあるので、1 文字を消費する NotWordOrStart で書ける（パターンの先頭）。
+	destructiveSQL = regexp.MustCompile(`(?i)` + py.NotWordOrStart +
+		`(?:DROP` + sp + `+(?:TABLE|DATABASE|SCHEMA)|TRUNCATE` + sp + `)`)
+)
+
+// normalize は表記ゆれをそろえる。--method=X / --method X / -XDELETE をすべて "-X X" に寄せ、改行を空白にする。
+func normalize(command string) string {
+	normalized := strings.ReplaceAll(command, "\n", " ")
+	normalized = methodFlagRE.ReplaceAllString(normalized, "-X ")
+	return joinedXFlag.ReplaceAllString(normalized, "${1}-X ${2}")
+}
+
+// analyzeCommand は Bash のコマンド文字列を判定し、拒否するなら対象の表記と理由を、通すなら空文字列を返す。
+func analyzeCommand(command string) (target, why string) {
+	if command == "" {
+		return "", ""
+	}
+	if !secondGateWords.MatchString(command) && !secondGatePaths.MatchString(command) {
+		return "", ""
+	}
+	normalized := normalize(command)
+	for _, rule := range commandRules {
+		if rule.pattern.MatchString(normalized) {
+			return rule.target, rule.why
+		}
+	}
+	if !strings.Contains(normalized, "--dry-run") {
+		for _, rule := range publishRules {
+			if rule.pattern.MatchString(normalized) {
+				return rule.target, rule.why
+			}
+		}
+	}
+	// HTTP クライアントによるクラウド API の DELETE（URL と -X の順序は問わない）。
+	if httpClientRE.MatchString(normalized) && deleteMethodRE.MatchString(normalized) &&
+		cloudHostRE.MatchString(normalized) {
+		return targetHTTPDelete, whyRemote
+	}
+	// DB クライアント経由の破壊 SQL（SQL ファイル内の文字列だけでは発火しない）。
+	if dbClientRE.MatchString(normalized) && destructiveSQL.MatchString(normalized) {
+		return targetDB, whyRemote
+	}
+	if target := checkSecretFiles(normalized); target != "" {
+		return target, whySecret
+	}
+	if target := checkGuardFiles(normalized); target != "" {
+		return target, whyGuard
+	}
+	return "", ""
+}
+
+// segments は `re.split(r"[|;&]", ...)` と同じく、パイプとコマンド区切りで分ける。
+func segments(command string) []string {
+	return strings.FieldsFunc(command, func(r rune) bool { return r == '|' || r == ';' || r == '&' })
+}
+
+var (
+	deleteVerbRE  = regexp.MustCompile(commandStart + pathPrefix + `(?:rm|unlink|shred|srm|truncate)` + sp)
+	inPlaceToolRE = regexp.MustCompile(commandStart + `(?:sed|perl)` + sp)
+	inPlaceFlagRE = regexp.MustCompile(sp + `-i`)
+)
+
+// checkSecretFiles は秘密ファイルへの破壊的な操作（削除・移動・in-place 書き換え・上書きリダイレクト・tee）を探し、
+// 見つかれば対象の表記を返す。
+func checkSecretFiles(normalized string) string {
+	for _, segment := range segments(normalized) {
+		scanner := newSecretScanner(segment)
+		tokens := scanner.tokens()
+		if len(tokens) == 0 {
+			continue
+		}
+		shown := tokens[0]
+		switch {
+		case deleteVerbRE.MatchString(segment):
+			return withToken(targetSecretDelete, shown)
+		case inPlaceToolRE.MatchString(segment) && inPlaceFlagRE.MatchString(segment):
+			return withToken(targetSecretInPlace, shown)
+		case scanner.movesSecret():
+			return withToken(targetSecretMove, shown)
+		case scanner.redirectsToSecret():
+			return withToken(targetSecretRedirect, shown)
+		case scanner.teesToSecret():
+			return withToken(targetSecretTee, shown)
+		}
+	}
+	return ""
+}
+
+// secretPathLabel は Edit / Write / apply_patch の対象のパスが秘密ファイルなら表示名を、違えば空文字列を返す。
+func secretPathLabel(value any) string {
+	path, _ := value.(string)
+	if path == "" {
+		return ""
+	}
+	trimmed := strings.TrimRight(path, "/")
+	base := trimmed[strings.LastIndex(trimmed, "/")+1:]
+	switch {
+	case base == ".envrc" || base == "envrc.local":
+		return base
+	case base == ".env" || (strings.HasPrefix(base, ".env.") && !envTemplates[base[len(".env."):]]):
+		return base
+	case strings.HasSuffix(base, ".pem"):
+		return base
+	}
+	parts := strings.Split(strings.ReplaceAll(path, `\`, "/"), "/")
+	for _, part := range parts[:len(parts)-1] {
+		if part != ".ssh" {
+			continue
+		}
+		if strings.HasSuffix(base, ".pub") || strings.HasPrefix(base, "known_hosts") || base == "config" {
+			return ""
+		}
+		return ".ssh/" + base
+	}
+	return ""
+}
+
+// envTemplates は秘密ファイルとみなさない .env.<名前> の名前（_ENV_OK）である。
+var envTemplates = map[string]bool{"example": true, "sample": true, "template": true, "dist": true}
+
+// patchHeaderRE は apply_patch の対象のファイルの行である。移植元は tool_input を JSON 文字列にしてから当てていたので、
+// パスは JSON でエスケープされる文字（\ と " と制御文字）の手前までになる。
+var patchHeaderRE = regexp.MustCompile(`\*\*\* (?:Add|Update|Delete) File: ([^\\"\x00-\x1f]+)`)
+
+// patchedSecretLabel は apply_patch の tool_input の中の文字列を、移植元の json.dumps と同じ順に辿り、
+// 最初に見つかった秘密ファイルの表示名を返す。
+func patchedSecretLabel(raw json.RawMessage) string {
+	for _, text := range jsonStrings(raw) {
+		for _, match := range patchHeaderRE.FindAllStringSubmatch(text, -1) {
+			if label := secretPathLabel(py.Strip(match[1])); label != "" {
+				return label
+			}
+		}
+	}
+	return ""
+}
+
+// jsonStrings は raw の JSON に含まれる文字列（object のキーを含む）を、Python の json.loads から json.dumps に
+// 戻したときと同じ順に返す。object の重複したキーは、最初に現れた位置に最後の値を置く（Python の dict と同じ）。
+func jsonStrings(raw json.RawMessage) []string {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	value, err := decodeOrdered(decoder)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	collectStrings(value, &out)
+	return out
+}
+
+// orderedObject は、キーの順序を保った JSON の object である。
+type orderedObject struct {
+	keys   []string
+	values map[string]any
+}
+
+func decodeOrdered(decoder *json.Decoder) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return token, nil
+	}
+	switch delim {
+	case '{':
+		object := &orderedObject{values: map[string]any{}}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, _ := keyToken.(string)
+			value, err := decodeOrdered(decoder)
+			if err != nil {
+				return nil, err
+			}
+			if _, seen := object.values[key]; !seen {
+				object.keys = append(object.keys, key)
+			}
+			object.values[key] = value
+		}
+		_, err = decoder.Token()
+		return object, err
+	case '[':
+		var items []any
+		for decoder.More() {
+			item, err := decodeOrdered(decoder)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+		}
+		_, err = decoder.Token()
+		return items, err
+	default:
+		return nil, errors.New("unexpected delimiter")
+	}
+}
+
+func collectStrings(value any, out *[]string) {
+	switch typed := value.(type) {
+	case string:
+		*out = append(*out, typed)
+	case []any:
+		for _, item := range typed {
+			collectStrings(item, out)
+		}
+	case *orderedObject:
+		for _, key := range typed.keys {
+			*out = append(*out, key)
+			collectStrings(typed.values[key], out)
+		}
+	}
+}
+
+// --- G. ガードファイル ---------------------------------------------------------
+
+// 守るのは hhx の実行ファイル・hhx の設定ディレクトリ・両 CLI の hook の登録ファイルである。
+// 移植元が守っていた旧配布先（~/.claude/hooks・~/.codex/hooks）と dotfiles の正本は、hook の実体がもう無いので外した。
+const (
+	// registrationCore は Claude の settings*.json と Codex の hooks.json・config.toml である（移植元の正規表現を引き継ぐ）。
+	registrationCore = `\.claude/settings[` + py.WordChars + `.]*\.json|\.codex/(?:hooks\.json|config\.toml)`
+	// guardPrefix は _PRE（トークンの直前に許す文字）である。
+	guardPrefix = `(?:^|[` + py.SpaceChars + `'"=(/>])`
+	// hhxTerminator は hhx の保護対象の直後の 1 文字である。hhx.bak のような別名のファイルまで止めないために置く。
+	hhxTerminator = `(?:[^` + py.WordChars + `.\-]|$)`
+	// pathTail は保護対象のディレクトリの配下（移植元の hooks(?:/[^\s'"|;&]*)? と同じ形）である。
+	pathTail = `(?:/[^` + py.SpaceChars + `'"|;&]*)?`
+)
+
+// executable は hhx の実行ファイルのパスを返す。テストで差し替える。
+var executable = os.Executable
+
+var (
+	moveVerbRE = regexp.MustCompile(commandStart + pathPrefix + `(?:rm|unlink|shred|srm|mv|trash)` + sp)
+	guardSkip  = []string{"__pycache__", ".ruff_cache", ".pytest_cache", ".DS_Store"}
+)
+
+// hhxCores は hhx の保護対象を、トークンの末尾に一致させる正規表現の断片で返す。
+// ホームディレクトリの下にあるものは、ホームからの相対で書く。~/…・$HOME/…・絶対パスのどれで書いても一致させるためである。
+func hhxCores() []string {
+	home := strings.TrimRight(os.Getenv("HOME"), "/")
+	var cores []string
+	seen := map[string]bool{}
+	add := func(path, tail string) {
+		relative := strings.TrimPrefix(path, "/")
+		if home != "" && strings.HasPrefix(path, home+"/") {
+			relative = path[len(home)+1:]
+		}
+		if core := regexp.QuoteMeta(relative) + tail; relative != "" && !seen[core] {
+			seen[core] = true
+			cores = append(cores, core)
+		}
+	}
+	if path, err := executable(); err == nil && strings.HasPrefix(path, "/") {
+		add(path, "")
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			add(resolved, "")
+		}
+	}
+	if home != "" {
+		add(home+"/.config/hhx", pathTail)
+	}
+	return cores
+}
+
+// guardPattern は `_PRE((?:\S*/)?GUARD_CORE)` を組み立てる。
+// 1 番目の括弧がトークンで、hhx の保護対象に一致したときは 2 番目の括弧がその終わり（直後の 1 文字を含めない）を示す。
+func guardPattern() *regexp.Regexp {
+	core := registrationCore
+	if cores := hhxCores(); len(cores) > 0 {
+		core += `|(?:` + strings.Join(cores, "|") + `)()` + hhxTerminator
+	}
+	return regexp.MustCompile(guardPrefix + `((?:` + py.NotSpace + `*/)?(?:` + core + `))`)
+}
+
+// checkGuardFiles はガード（hhx・hook の登録）の削除・移動を探し、見つかれば対象の表記を返す。
+// 編集とキャッシュの掃除は対象外である。
+func checkGuardFiles(normalized string) string {
+	var pattern *regexp.Regexp
+	for _, segment := range segments(normalized) {
+		if !moveVerbRE.MatchString(segment) {
+			continue
+		}
+		if pattern == nil {
+			pattern = guardPattern()
+		}
+		for _, match := range pattern.FindAllStringSubmatchIndex(segment, -1) {
+			end := match[3]
+			if match[4] >= 0 {
+				end = match[4]
+			}
+			token := segment[match[2]:end]
+			if !containsAny(token, guardSkip) {
+				return withToken(targetGuard, token)
+			}
+		}
+	}
+	return ""
+}
+
+func containsAny(text string, words []string) bool {
+	for _, word := range words {
+		if strings.Contains(text, word) {
+			return true
+		}
+	}
+	return false
+}
+
+// secretScanner は 1 つのセグメントの中から、移植元の SECRET_CORE（秘密ファイルのトークン）を探す。
+//
+// 移植元の正規表現は否定の先読み・後読みを使っており、RE2 では書けない。先読みが失敗すると Python は
+// 任意部分を短くしてやり直す（バックトラックする）ので、候補を最長で 1 つ取って確かめるだけでは同じにならない。
+// ここでは同じ優先順で候補を試す手書きの照合にし、位置ごとの結果を覚えて入力の長さに比例する時間で終える。
+//
+//	SECRET_CORE  = (?:\S*/)?(?:_ENV|_ENVRC_LOCAL|_SSH|_PEM)
+//	_ENV         = \.env(?:rc)?(?:\.(?!OK(?![\w.-]))[\w-][\w.-]*)?(?![\w.\-/])   OK = example|sample|template|dist
+//	_ENVRC_LOCAL = envrc\.local(?![\w.\-/])
+//	_SSH         = \.ssh(?:/(?!known_hosts|config(?![\w.-]))[\w.@-]+(?<!\.pub))?/?(?![\w.\-/])
+//	_PEM         = [\w.@-]*\.pem(?![\w.\-/])
+//
+// 位置は rune 単位で数える（Python の str の添字と同じ）。
+type secretScanner struct {
+	text []rune
+	// nameEnd[i] は i から始まる [\w.-] の並びの終わり、pathEnd[i] は [\w.@-] の並びの終わりである。
+	nameEnd, pathEnd []int
+	// bestSlash[i] は i から始まる \S の並びの中で、直後から秘密ファイルの名前が始まる最も右の / の位置（無ければ -1）である。
+	bestSlash []int
+	// ends は位置ごとの coreName の結果（未計算は -2、不一致は -1）である。
+	ends []int
+}
+
+func newSecretScanner(segment string) *secretScanner {
+	text := []rune(segment)
+	size := len(text)
+	scanner := &secretScanner{
+		text: text, nameEnd: make([]int, size+1), pathEnd: make([]int, size+1),
+		bestSlash: make([]int, size+1), ends: make([]int, size+1),
+	}
+	scanner.nameEnd[size], scanner.pathEnd[size], scanner.bestSlash[size] = size, size, -1
+	for index := size - 1; index >= 0; index-- {
+		scanner.nameEnd[index], scanner.pathEnd[index] = index, index
+		if isNameChar(text[index]) {
+			scanner.nameEnd[index] = scanner.nameEnd[index+1]
+		}
+		if isNameChar(text[index]) || text[index] == '@' {
+			scanner.pathEnd[index] = scanner.pathEnd[index+1]
+		}
+	}
+	for index := range scanner.ends {
+		scanner.ends[index] = -2
+	}
+	for index := size - 1; index >= 0; index-- {
+		switch {
+		case py.IsSpace(text[index]):
+			scanner.bestSlash[index] = -1
+		case scanner.bestSlash[index+1] >= 0:
+			scanner.bestSlash[index] = scanner.bestSlash[index+1]
+		case text[index] == '/' && scanner.coreName(index+1) >= 0:
+			scanner.bestSlash[index] = index
+		default:
+			scanner.bestSlash[index] = -1
+		}
+	}
+	return scanner
+}
+
+// isNameChar は [\w.-] である。
+func isNameChar(r rune) bool {
+	return py.IsWord(r) || r == '.' || r == '-'
+}
+
+// endsName は先読み (?![\w.\-/]) が成り立つか（index が末尾か、その文字が [\w.\-/] でないか）を返す。
+func (s *secretScanner) endsName(index int) bool {
+	return index >= len(s.text) || (!isNameChar(s.text[index]) && s.text[index] != '/')
+}
+
+// endsNameStrict は先読み (?![\w.-]) が成り立つかを返す（/ を含まない）。
+func (s *secretScanner) endsNameStrict(index int) bool {
+	return index >= len(s.text) || !isNameChar(s.text[index])
+}
+
+func (s *secretScanner) hasAt(index int, literal string) bool {
+	for _, r := range literal {
+		if index >= len(s.text) || s.text[index] != r {
+			return false
+		}
+		index++
+	}
+	return true
+}
+
+// core は SECRET_CORE を index から照合し、一致すればその終わりを、しなければ -1 を返す。
+// (?:\S*/)? は貪欲なので、右の / から順に試し、どれも駄目なら接頭辞なしで試す。
+func (s *secretScanner) core(index int) int {
+	if slash := s.bestSlash[index]; slash >= 0 {
+		return s.coreName(slash + 1)
+	}
+	return s.coreName(index)
+}
+
+// coreName は _ENV|_ENVRC_LOCAL|_SSH|_PEM をこの順に index から照合する。
+func (s *secretScanner) coreName(index int) int {
+	if s.ends[index] != -2 {
+		return s.ends[index]
+	}
+	end := s.env(index)
+	if end < 0 && s.hasAt(index, "envrc.local") && s.endsName(index+len("envrc.local")) {
+		end = index + len("envrc.local")
+	}
+	if end < 0 {
+		end = s.ssh(index)
+	}
+	if end < 0 {
+		end = s.pem(index)
+	}
+	s.ends[index] = end
+	return end
+}
+
+// env は _ENV である。rc の有無はこの順に試す。
+// 名前の部分 [\w-][\w.-]* は、終わりの先読みがあるので [\w.-] の並びを最後まで取ったときにしか成り立たない。
+// 並び全体が OK の語ならその部分は付けられず、付けないと直後の . が先読みで弾かれる。
+func (s *secretScanner) env(index int) int {
+	if !s.hasAt(index, ".env") {
+		return -1
+	}
+	starts := []int{index + len(".env")}
+	if s.hasAt(index+len(".env"), "rc") {
+		starts = []int{index + len(".envrc"), index + len(".env")}
+	}
+	for _, start := range starts {
+		if s.hasAt(start, ".") {
+			nameStart := start + 1
+			nameEnd := s.nameEnd[nameStart]
+			if nameEnd > nameStart && s.text[nameStart] != '.' &&
+				!envTemplates[string(s.text[nameStart:nameEnd])] && s.endsName(nameEnd) {
+				return nameEnd
+			}
+		}
+		if s.endsName(start) {
+			return start
+		}
+	}
+	return -1
+}
+
+// ssh は _SSH である。/ に続く名前 [\w.@-]+ は長い順に試す。
+// 最長でない長さで終わりの先読みが成り立つのは、次の文字が @（[\w.@-] に入り、[\w.\-/] に入らない）のときだけである。
+func (s *secretScanner) ssh(index int) int {
+	if !s.hasAt(index, ".ssh") {
+		return -1
+	}
+	after := index + len(".ssh")
+	nameStart := after + 1
+	if s.hasAt(after, "/") && !s.hasAt(nameStart, "known_hosts") &&
+		(!s.hasAt(nameStart, "config") || !s.endsNameStrict(nameStart+len("config"))) {
+		longest := s.pathEnd[nameStart]
+		for end := longest; end > nameStart; end-- {
+			if end < longest && s.text[end] != '@' {
+				continue
+			}
+			if end >= 4 && string(s.text[end-4:end]) == ".pub" {
+				continue
+			}
+			if result := s.optionalSlash(end); result >= 0 {
+				return result
+			}
+		}
+	}
+	return s.optionalSlash(after)
+}
+
+// optionalSlash は `/?(?![\w.\-/])` を index から照合する。/ は貪欲に取る。
+func (s *secretScanner) optionalSlash(index int) int {
+	if s.hasAt(index, "/") && s.endsName(index+1) {
+		return index + 1
+	}
+	if s.endsName(index) {
+		return index
+	}
+	return -1
+}
+
+// pem は _PEM である。[\w.@-]* は貪欲なので、並びの中の .pem を右から順に試す。
+func (s *secretScanner) pem(index int) int {
+	for start := s.pathEnd[index] - len(".pem"); start >= index; start-- {
+		if s.hasAt(start, ".pem") && s.endsName(start+len(".pem")) {
+			return start + len(".pem")
+		}
+	}
+	return -1
+}
+
+// isPrefixChar は _PRE（トークンの直前に許す文字 [\s'"=(/>]）である。
+// > が要るのは空白なしのリダイレクト（`echo x >.env`）を拾うためである。
+func isPrefixChar(r rune) bool {
+	return py.IsSpace(r) || strings.ContainsRune(`'"=(/>`, r)
+}
+
+// tokens は `re.finditer(_PRE(SECRET_CORE))` の各一致のトークンを、移植元と同じ順に返す。
+func (s *secretScanner) tokens() []string {
+	var found []string
+	position := 0
+	for {
+		start, end := s.nextToken(position)
+		if start < 0 {
+			return found
+		}
+		found = append(found, string(s.text[start:end]))
+		position = end
+	}
+}
+
+// nextToken は position 以降で最初に一致するトークンの範囲を返す。
+// 一致の開始は _PRE の位置で、`^` は文字列の先頭でだけ、文字クラスより先に試す。
+func (s *secretScanner) nextToken(position int) (start, end int) {
+	if position == 0 {
+		if end := s.core(0); end >= 0 {
+			return 0, end
+		}
+	}
+	for index := position; index < len(s.text); index++ {
+		if !isPrefixChar(s.text[index]) {
+			continue
+		}
+		if end := s.core(index + 1); end >= 0 {
+			return index + 1, end
+		}
+	}
+	return -1, -1
+}
+
+// quotedCoreAt は `['"]?{SECRET_CORE}` が index から一致するかを返す。
+func (s *secretScanner) quotedCoreAt(index int) bool {
+	if index >= len(s.text) {
+		return false
+	}
+	if s.core(index) >= 0 {
+		return true
+	}
+	return (s.text[index] == '\'' || s.text[index] == '"') && s.core(index+1) >= 0
+}
+
+// skipSpaces は index から空白を読み飛ばした位置を返す。
+func (s *secretScanner) skipSpaces(index int) int {
+	for index < len(s.text) && py.IsSpace(s.text[index]) {
+		index++
+	}
+	return index
+}
+
+// commandAt は index から語 name が始まり、直後が空白で、直前が `(?:^|[\s(])` の境界（allowPath なら / も）かを返す。
+// PATH_PREFIX の \S*/ は、直前が / なら必ず境界（先頭か空白か ( ）まで遡れるので、「直前が / 」と同じになる。
+func (s *secretScanner) commandAt(index int, name string, allowPath bool) bool {
+	if !s.hasAt(index, name) || index+len(name) >= len(s.text) || !py.IsSpace(s.text[index+len(name)]) {
+		return false
+	}
+	if index == 0 {
+		return true
+	}
+	before := s.text[index-1]
+	return py.IsSpace(before) || before == '(' || (allowPath && before == '/')
+}
+
+// argumentReaches は、コマンド名の直後の空白から、ハイフンで始まる引数の並びを飛ばした先の引数のどれかが
+// `['"]?{SECRET_CORE}` に一致するかを返す。minDash はハイフンの後ろに要る \S の数（-\S+ なら 1、-\S* なら 0）である。
+// 空白の途中から照合を始めてもトークンは一致しないので、各引数の先頭だけを試せばよい。
+func (s *secretScanner) argumentReaches(index, minDash int) bool {
+	for {
+		index = s.skipSpaces(index)
+		if s.quotedCoreAt(index) {
+			return true
+		}
+		if index >= len(s.text) || s.text[index] != '-' {
+			return false
+		}
+		end := index + 1
+		for end < len(s.text) && !py.IsSpace(s.text[end]) {
+			end++
+		}
+		// ハイフンの引数の後ろには空白が要る。
+		if end-index-1 < minDash || end >= len(s.text) {
+			return false
+		}
+		index = end
+	}
+}
+
+// movesSecret は `(?:^|[\s(]){PATH_PREFIX}mv\s+(?:-\S+\s+)*['"]?{SECRET_CORE}` である。
+func (s *secretScanner) movesSecret() bool {
+	for index := range s.text {
+		if s.commandAt(index, "mv", true) && s.argumentReaches(index+len("mv"), 1) {
+			return true
+		}
+	}
+	return false
+}
+
+// teesToSecret は `(?:^|[\s(])tee\s+(?:-\S*\s+)*['"]?{SECRET_CORE}` である。
+func (s *secretScanner) teesToSecret() bool {
+	for index := range s.text {
+		if s.commandAt(index, "tee", false) && s.argumentReaches(index+len("tee"), 0) {
+			return true
+		}
+	}
+	return false
+}
+
+// redirectsToSecret は `(?<!>)>\s*['"]?{SECRET_CORE}`（>> を除く上書きのリダイレクト）である。
+func (s *secretScanner) redirectsToSecret() bool {
+	for index, r := range s.text {
+		if r != '>' || (index > 0 && s.text[index-1] == '>') {
+			continue
+		}
+		if s.quotedCoreAt(s.skipSpaces(index + 1)) {
+			return true
+		}
+	}
+	return false
+}
