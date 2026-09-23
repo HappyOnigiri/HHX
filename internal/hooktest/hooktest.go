@@ -12,6 +12,7 @@ import (
 
 	"github.com/HappyOnigiri/hhx/internal/config"
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 )
 
 // Deny は Result.Decision の拒否である。通したときの Decision は空文字列になる。
@@ -32,6 +33,22 @@ type Options struct {
 	Args []string
 }
 
+// LanguageEnv は hook のテストを流す表示言語を選ぶ環境変数である。空なら英語（既定）で流す。
+// `make test-ja` がこれを ja にして、同じテストを日本語の文面でも流す。
+const LanguageEnv = "HHX_TEST_LANGUAGE"
+
+// Language はテストを流す表示言語である。期待する文面は、テスト側でカタログからこの言語で引く。
+var Language = i18n.Normalize(os.Getenv(LanguageEnv))
+
+// withLanguage は設定ファイルの中身に Language を足す。英語は既定なので何も足さない。
+// テストが自分で language を書いた設定はそのまま使う。
+func withLanguage(content string) string {
+	if Language == i18n.English || strings.Contains(content, "language:") {
+		return content
+	}
+	return "language: " + string(Language) + "\n" + content
+}
+
 // Run は definition を stdin の raw で起動し、出力を検査して判定を返す。
 // 出力は PreToolUse の hookSpecificOutput だけを持つ JSON であることを確かめる。
 func Run(t *testing.T, definition hookrt.Definition, raw string, options Options) Result {
@@ -44,9 +61,9 @@ func Run(t *testing.T, definition hookrt.Definition, raw string, options Options
 func Output(t *testing.T, definition hookrt.Definition, raw string, options Options) string {
 	t.Helper()
 	var cfg *config.Config
-	if options.Config != "" {
+	if content := withLanguage(options.Config); content != "" {
 		path := filepath.Join(t.TempDir(), "config.yaml")
-		if err := os.WriteFile(path, []byte(options.Config), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		loaded, err := config.Load(path)

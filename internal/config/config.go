@@ -1,6 +1,6 @@
 // Package config は hhx の設定ファイル（既定は ~/.config/hhx/config.yaml）を読む。
 //
-// 定義するのは hook ごとの enabled と、hook 固有の設定を置く場所だけである。
+// 定義するのは表示言語（language）と、hook ごとの enabled と、hook 固有の設定を置く場所だけである。
 // hook 固有の項目は各 hook が Decode で自分の型へ読み込み、ここでは中身を解釈しない。
 package config
 
@@ -14,6 +14,8 @@ import (
 	"sort"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 )
 
 // PathEnv は設定ファイルの場所を差し替える環境変数である。テストが一時的な設定を渡すために使う。
@@ -24,7 +26,10 @@ const maxConfigSize = 1 << 20
 
 // Config は読み込んだ設定である。ゼロ値は「設定ファイルが無い」状態と同じで、すべての hook が既定値で動く。
 type Config struct {
-	Hooks map[string]Hook
+	// Language は設定に書かれた表示言語の値そのものである。解釈は DisplayLanguage と install の検査が行う。
+	// 不正な値でも読み込みはエラーにしない。hook は英語へ倒して動き続け、install が報告する。
+	Language string
+	Hooks    map[string]Hook
 }
 
 // Hook は hook 1 本分の設定である。
@@ -35,7 +40,8 @@ type Hook struct {
 }
 
 type document struct {
-	Hooks map[string]yaml.Node `yaml:"hooks"`
+	Language string               `yaml:"language"`
+	Hooks    map[string]yaml.Node `yaml:"hooks"`
 }
 
 // DefaultPath は設定ファイルの場所を返す。PathEnv が空でなければそれを優先する。
@@ -94,7 +100,7 @@ func parse(data []byte) (*Config, error) {
 		}
 		return nil, err
 	}
-	config := &Config{Hooks: map[string]Hook{}}
+	config := &Config{Language: raw.Language, Hooks: map[string]Hook{}}
 	for name, node := range raw.Hooks {
 		hook, err := parseHook(name, node)
 		if err != nil {
@@ -130,6 +136,14 @@ func parseHook(name string, node yaml.Node) (Hook, error) {
 		hook.Enabled = &enabled
 	}
 	return hook, nil
+}
+
+// DisplayLanguage は表示に使う言語を返す。未指定・不正な値は英語にする。
+func (c *Config) DisplayLanguage() i18n.Language {
+	if c == nil {
+		return i18n.English
+	}
+	return i18n.Normalize(c.Language)
 }
 
 // Enabled は hook が有効かを返す。設定に enabled が無ければ fallback（hook の既定）を返す。
