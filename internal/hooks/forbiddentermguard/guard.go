@@ -101,13 +101,17 @@ func run(c *hookrt.Context) error {
 }
 
 // commandAndCWD は判定するコマンドと、その実行ディレクトリを返す。
-// payload が JSON の object でなければ、argv の経路ではその文字列をコマンドとし、プロセスの cwd を使う。
-// stdin の経路では何もしない（fail-open）。
+// payload が JSON の object でないか、tool_input が object でなければ（移植元で AttributeError になっていた形）、
+// argv の経路ではその文字列をコマンドとし、プロセスの cwd を使う。stdin の経路では何もしない（fail-open）。
 func commandAndCWD(c *hookrt.Context) (command, cwd string, ok bool) {
 	var payload any
 	if json.Unmarshal(c.Input, &payload) == nil {
 		if object, isObject := payload.(map[string]any); isObject {
-			return fromPayload(object)
+			if toolInput, present := object["tool_input"]; !present {
+				return fromPayload(object, map[string]any{})
+			} else if mapping, isMapping := toolInput.(map[string]any); isMapping {
+				return fromPayload(object, mapping)
+			}
 		}
 	}
 	if !c.FromArgs {
@@ -120,17 +124,9 @@ func commandAndCWD(c *hookrt.Context) (command, cwd string, ok bool) {
 	return string(c.Input), cwd, true
 }
 
-// fromPayload は payload の object から command と cwd を取り出す。
-// 移植元で例外になっていた形（command が文字列でない、cwd が空でない文字列以外）は、何もしない。
-func fromPayload(object map[string]any) (command, cwd string, ok bool) {
-	toolInput := map[string]any{}
-	if value, present := object["tool_input"]; present {
-		mapping, isMapping := value.(map[string]any)
-		if !isMapping {
-			return "", "", false
-		}
-		toolInput = mapping
-	}
+// fromPayload は payload の object と tool_input から command と cwd を取り出す。
+// 移植元で例外になって無出力で終わっていた形（command が文字列でない、cwd が空でない文字列以外）は、何もしない。
+func fromPayload(object, toolInput map[string]any) (command, cwd string, ok bool) {
 	if value, present := toolInput["command"]; present {
 		if command, ok = value.(string); !ok {
 			return "", "", false

@@ -301,6 +301,15 @@ func TestArgvPathUsesProcessCWD(t *testing.T) {
 	if got := hooktest.Argv(t, Definition(), payload); got.Decision != "" {
 		t.Errorf("argv payload must use its cwd: %+v", got)
 	}
+	// tool_input が object でない JSON は、移植元と同じく文字列全体をコマンドとして判定する。
+	for _, raw := range []string{
+		`{"tool_input": null, "x": "cd a && gh pr create --body ` + term + `"}`,
+		`{"tool_input": " gh pr create --body ` + term + `"}`,
+	} {
+		if got := hooktest.Argv(t, Definition(), raw); got.Decision != hooktest.Deny {
+			t.Errorf("argv %q: %+v", raw, got)
+		}
+	}
 }
 
 // payload の cwd が空なら、プロセスの cwd を使う。
@@ -326,7 +335,7 @@ func TestOddInputsDoNotCrash(t *testing.T) {
 		"", "   ", "gh pr create --body " + term, "[]", "null", "0", `"gh"`,
 		`{"tool_input": {"command": null}, "x": "gh"}`,
 		`{"tool_input": {"command": 123}, "x": "gh"}`,
-		`{"tool_input": "gh pr create --body ` + term + `"}`,
+		`{"tool_input": " gh pr create --body ` + term + `"}`,
 		`{"tool_input": null, "x": "gh"}`,
 		`{"tool_input": {"command": "gh pr create --body ` + term + `"}, "cwd": 1}`,
 		`{"tool_input": {"command": "gh pr create --body ` + term + `"}, "cwd": ["x"]}`,
