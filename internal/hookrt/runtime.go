@@ -125,6 +125,28 @@ func (c *Context) AddContext(event, text string) {
 	}})
 }
 
+// Notify は systemMessage（利用者への警告）と、event の additionalContext を出力する。空の項目は書かない。
+// 両方が空なら何も出力しない。判断のフィールド（deny など）は持たない。
+func (c *Context) Notify(event, text, systemMessage string) {
+	type specific struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	}
+	var output struct {
+		SystemMessage      string    `json:"systemMessage,omitempty"`
+		HookSpecificOutput *specific `json:"hookSpecificOutput,omitempty"`
+	}
+	output.SystemMessage = systemMessage
+	if text != "" {
+		output.HookSpecificOutput = &specific{HookEventName: event, AdditionalContext: text}
+	}
+	if systemMessage == "" && text == "" {
+		c.output = nil
+		return
+	}
+	c.setJSON(output)
+}
+
 // Print は平文を出力する。UserPromptSubmit では stdout の平文がそのままコンテキストに入る。
 func (c *Context) Print(text string) {
 	c.output = []byte(text)
