@@ -34,7 +34,8 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `internal/hooktest`: hook のテストの補助（テストからだけ使う）。偽の gh と、
   HOME・作業ディレクトリ・git の設定を隔離する `Main` を持つ
 - `internal/install`: Claude の settings.json と Codex の hooks.json の読み書き
-- `internal/config`: `~/.config/hhx/config.yaml` の読み込み
+- `internal/config`: `~/.config/hhx/config.yaml` の読み込み（表示言語 `language` を含む）
+- `internal/i18n`: 表示言語（`en` / `ja`、既定は英語）と、ID ごとに英語と日本語を持つカタログ。各パッケージの `messages.go` が自分の表を `Register` する
 - `internal/update`: GitHub Releases の確認と、Release 添付の `install.sh` による更新（`hhx update`）
 - `internal/waitci`: `hhx wait-ci`（PR の CI の完了を 1 回だけ報告する）の判定の本体。引数の解析と出力は `cmd/hhx/waitci.go` が持つ。
   hook ではないので hook の実行時の保護（fail-open）を通さない。1 行目の結論・最終行の `wait-ci: exit=...`・終了コードは読み手との契約なので変えない。
@@ -45,7 +46,7 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 
 ## 開発
 
-- CI と同じ検査は `make ci`（lint・race とカバレッジのテスト・配布物・インストーラーの検査を並列に走らせる）。
+- CI と同じ検査は `make ci`（lint・race とカバレッジのテスト・日本語の表示でのテスト・配布物・インストーラーの検査を並列に走らせる）。
 - CI のジョブは Makefile のターゲットを 1 つずつ走らせる。検査を足すときは Makefile に書き、`ci-checks` と `ci.yml` の matrix の両方へ足す。
 - CI のテストは citest 経由で走り、落ちたテストを 1 回だけ再実行する。再実行で通ったテストは CI を落とさず、
   CI の完了後に `report-flaky-tests.yml` がテストごとに issue を起票する。再実行でも落ちれば CI は失敗する。
@@ -57,6 +58,17 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
   API を Go から直接呼ばない（認証を gh に任せ、テストで偽の gh に差し替えるため）。
 - install のテストは一時的な HOME で行い、実機の設定ファイルに触れない。
 - コメントは日本語で書き、保守に必要な意図・制約・契約だけを残す。
+- 出力する文面（deny の理由文・注入するコンテキスト・CLI の出力）は、各パッケージの `messages.go` のカタログに英語と日本語で置く。
+  - Go のソースの文字列リテラルに日本語を書くのは `messages.go` とテストだけにする（`cmd/hhx/catalog_test.go` が検査する）。
+  - ID にはパッケージの利用者名（hook 名・`wait-ci`・`cli`）を前置きし、各 ID に文の意図（何を止め、何を促すか）を 1 行のコメントで書く。
+  - 差し込みは `{{.Name}}` だけにし、英語と日本語で同じ名前の集合を使う（`i18n.Validate` が検査する）。
+  - 翻訳しないもの: JSON のキー、注入のタグと項目名、`wait-ci:` の接頭辞・最終行・check の結果の語、利用者が設定で書いた文、
+    discard-guard の snapshot のメッセージ（永続データなので規則の ID で書く）。
+  - エージェント向けの英訳は、直訳ではなく同じ指示が伝わることを基準にする。「❌ Blocked:」「Reason:」「Action:」の段の数と順序を保ち、
+    禁止と代替は命令文で書く（should / consider に弱めない）。コマンド・フラグ・パスは訳さない。
+  - 表示言語は、hook では一次ゲートより後に `hookrt.Context.Language` で、CLI では設定から 1 回だけ決める。
+    エラーの `Error()` は英語のままにし、表示するときに CLI がカタログの文面を選ぶ。
+  - 日英対訳の一覧は `HHX_CATALOG_DUMP=<path> go test ./cmd/hhx -run TestDumpCatalogForReview` で書き出せる（見直し用。リポジトリには置かない）。
 
 ## hook の移植の型
 
@@ -65,8 +77,9 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
 - パッケージは `internal/hooks/<hook 名からハイフンを除いたもの>`。中身は次の 3 つにする。
   - `guard.go`: `Definition()`（名前・既定の有効・登録先・一次ゲート・`Run`）と判定のロジック。
     登録先は移植元の Claude の settings と Codex の hooks.json の matcher をそのまま写す。
-  - `messages.go`: 理由文。回避を思いとどまらせるのは理由文だけなので、迂回せず報告するよう文面で促す。
+  - `messages.go`: 理由文のカタログ（ID と英語・日本語の文面）。回避を思いとどまらせるのは理由文だけなので、迂回せず報告するよう文面で促す。
     Claude Code と Codex の両方に出るので、片方にしか無いツール名を書かない。注入系の hook では、注入する文面と警告をここに置く。
+    判定の関数は発火した規則の ID を返し、文面は出力の直前にカタログから組み立てる。
   - `guard_test.go`
 - `internal/registry` の一覧へ、移植元の登録順の位置に足す。Makefile の `GO_COVERAGE_PACKAGES` にも足す。
 - 判定は Python の意味を 1 対 1 で移す。書き直して「より正しく」しない。気付いた穴は README の Limits に書くか、別の作業に回す。
@@ -94,6 +107,9 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
 - テストは Go に移す。
   - 移植元の Python テストのケースは L2 も含めてすべて表の行として移す。L1 相当は `hooktest` で実運用と同じ経路（stdin の payload、argv）から起動し、判定と発火したルールのラベルを見る。
   - 奇妙な入力（空、`null`、`[]`、型の違う `command`・`tool_input`）、末尾の改行、設定で無効にしたときの無出力を足す。
+  - 理由文や注入の中身は、期待する文字列を直書きせず、`hooktest.Language` の言語でカタログから引いて確かめる。
+    `make test-ja`（CI の `test-ja` ジョブ）は同じテストを `HHX_TEST_LANGUAGE=ja` で流し、日本語の文面でも通ることを確かめる。
+  - Codex の `additionalContextLimit` を持つ注入は、両言語の最長の文面が上限に収まることをテストする（英語は長くなりやすい）。
   - テストには実際の禁止語や個人のパスを書かず、架空の値（`acme-internal`、`/Users/alice`）を使う。
   - cwd が空のときやデバッグ経路でプロセスの作業ディレクトリを使う hook のテストは、`TestMain` で git 管理下でない一時ディレクトリへ移る
     （discard-guard はそこに snapshot を作ろうとするので、パッケージのディレクトリのままだと開発中のリポジトリに ref を作る）。
