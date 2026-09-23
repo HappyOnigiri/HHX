@@ -292,13 +292,13 @@ func fetchAll(targets []target, cwd string, cache *store, dirs *dirResolver) ([]
 	for index, target := range targets {
 		comments[index] = make([]any, len(target.comments))
 		errs[index] = make([]error, 1+len(target.comments))
-		group.Go(func() {
+		group.Go(abortOnPanic(&errs[index][0], func() {
 			pulls[index] = fetchPR(target.ownerRepo, target.number, cwd, cache, dirs)
-		})
+		}))
 		for position, id := range target.comments {
-			group.Go(func() {
+			group.Go(abortOnPanic(&errs[index][1+position], func() {
 				comments[index][position], errs[index][1+position] = fetchComment(target.ownerRepo, id, cwd, cache, dirs)
-			})
+			}))
 		}
 	}
 	group.Wait()
@@ -311,6 +311,19 @@ func fetchAll(targets []target, cwd string, cache *store, dirs *dirResolver) ([]
 		}
 	}
 	return pulls, comments, nil
+}
+
+// abortOnPanic は、goroutine の中の panic を slot の errAbort に変えて返す。
+// hookrt.Run の recover は別の goroutine の panic を拾えず、そのままだと終了コード 2 でプロンプトを止めるため。
+func abortOnPanic(slot *error, body func()) func() {
+	return func() {
+		defer func() {
+			if recover() != nil {
+				*slot = errAbort
+			}
+		}()
+		body()
+	}
 }
 
 func fetchPR(ownerRepo, number, cwd string, cache *store, dirs *dirResolver) any {

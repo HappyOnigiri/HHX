@@ -2,6 +2,7 @@ package prcontext
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -345,6 +346,16 @@ func TestAbortsLikeThePythonImplementation(t *testing.T) {
 	f.setComment(t, 12, comment(map[string]any{"user": "someone"}))
 	if out := f.run(t, "https://github.com/o/r/pull/10088#discussion_r12", "", "s2"); out != "" {
 		t.Fatalf("a non-object user must drop the output: %q", out)
+	}
+}
+
+// TestPanicInAFetchAbortsInsteadOfCrashing は、並列の取得の中の panic が errAbort になり、プロセスを落とさないことを確かめる。
+// nil の store は読み込みで panic するので、PR とコメントの両方の goroutine で panic を起こせる。
+func TestPanicInAFetchAbortsInsteadOfCrashing(t *testing.T) {
+	targets := []target{{ownerRepo: "o/r", number: "1", comments: []string{"11"}}}
+	pulls, comments, err := fetchAll(targets, t.TempDir(), nil, &dirResolver{})
+	if !errors.Is(err, errAbort) || pulls != nil || comments != nil {
+		t.Fatalf("fetchAll = %v, %v, %v; want nil, nil, errAbort", pulls, comments, err)
 	}
 }
 
