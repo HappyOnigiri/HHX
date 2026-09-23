@@ -1,5 +1,4 @@
 GO ?= go
-PYTHON ?= python3
 INSTALL_DIR ?= $(HOME)/.local/bin
 RELEASE_DIR ?= artifacts/release
 # バージョンの真実源はリリースタグ（vX.Y.Z）である。タグを取得していない checkout ではコミットへ退避する。
@@ -26,7 +25,7 @@ CI_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 CI_MAKEFLAGS := -j$(CI_JOBS) --keep-going $(if $(filter output-sync,$(.FEATURES)),--output-sync=target)
 
 .PHONY: build install fmt lint go-lint go-deadcode mod-tidy-check markdown-lint reporter-check test test-race-coverage \
-	version-check release release-check install-test uninstall-test compat-test ci ci-checks check $(GOLANGCI_LINT)
+	version-check release release-check install-test uninstall-test ci ci-checks $(GOLANGCI_LINT)
 
 build:
 	mkdir -p bin
@@ -119,17 +118,8 @@ uninstall-test:
 	bash -n scripts/test-uninstall.sh
 	bash scripts/test-uninstall.sh
 
-# 移行期間だけ置く互換スイート。既定では bin/hhx を対象にし、未移植の hook は skip する。
-# Python 実装と比べるときは HHX_COMPAT_TARGET=python と HHX_COMPAT_PYTHON_HOOKS を渡す。
-# 元の Python 実装を参照するので、ci と CI には含めない。
-compat-test: build
-	HHX_BIN="$(CURDIR)/bin/hhx" $(PYTHON) -m unittest discover -s compat -t compat
-
 ci:
 	$(MAKE) $(CI_MAKEFLAGS) ci-checks
 
 # どのチェックも読み取り専用か、自分の出力先（bin/ と一時ディレクトリ）にしか書かないので、並行して実行できる。
 ci-checks: version-check release-check install-test uninstall-test lint reporter-check test-race-coverage mod-tidy-check
-
-# 手元の総合確認。CI と同じ検査に互換スイートを足す。
-check: ci compat-test

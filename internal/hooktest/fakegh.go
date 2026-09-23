@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// 偽の gh は compat/fake_gh.py と同じ規約で動く。gh を呼ぶ hook の Go のテストと互換スイートで、同じ差し替え方を使う。
+// 偽の gh は次の規約で動く。gh を呼ぶ hook の Go のテストは、同じ差し替え方を使う。
 //
 //	FAKE_GH_DIR   … フィクスチャと呼び出しの記録（calls.log）の置き場
 //	FAKE_GH_MODE  … ok（既定）/ fail / garbage / empty / hang

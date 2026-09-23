@@ -16,7 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// PathEnv は設定ファイルの場所を差し替える環境変数である。テストと互換スイートが一時的な設定を渡すために使う。
+// PathEnv は設定ファイルの場所を差し替える環境変数である。テストが一時的な設定を渡すために使う。
 const PathEnv = "HHX_CONFIG"
 
 // maxConfigSize は読み込む設定ファイルの上限である。hook は全 Bash 呼び出しで走るため、巨大なファイルで遅くしない。

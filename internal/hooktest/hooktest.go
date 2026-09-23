@@ -103,7 +103,7 @@ func parse(t *testing.T, output []byte) Result {
 	return Result{Decision: specific.PermissionDecision, Reason: specific.PermissionDecisionReason}
 }
 
-// BashPayload は Claude Code が Bash の PreToolUse で渡す payload を作る（互換スイートの run_hook と同じ形）。
+// BashPayload は Claude Code が Bash の PreToolUse で渡す payload を作る。
 // toolInput に追加する項目（run_in_background など）は extra で渡す。
 func BashPayload(command, cwd string, extra map[string]any) string {
 	toolInput := map[string]any{"command": command}
