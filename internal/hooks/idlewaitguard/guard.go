@@ -64,14 +64,11 @@ func run(c *hookrt.Context) error {
 	if command == "" {
 		return nil
 	}
-	label, detail := classify(command)
+	label := classify(command)
 	if label == "" {
 		return nil
 	}
-	if label == waitLabel && !background {
-		detail = strings.Replace(detail, waitBackgroundSentence, waitForegroundSentence, 1)
-	}
-	c.Deny(reason(label, detail, py.QuoteJSON(command)))
+	c.Deny(reason(c.Language(), label, background, py.QuoteJSON(command)))
 	return nil
 }
 
@@ -132,8 +129,8 @@ func segmentIsNoop(segment string) bool {
 	return noopCommands[head]
 }
 
-// classify はコマンド全体を見て、拒否するなら理由文の見出しと本文を、通すなら空文字列を返す。
-func classify(command string) (label, detail string) {
+// classify はコマンド全体を見て、拒否するなら理由文の系統（WAIT か NOOP）を、通すなら空文字列を返す。
+func classify(command string) string {
 	segments := separatorRE.Split(command, -1)
 	nonEmpty := false
 	for _, segment := range segments {
@@ -141,16 +138,16 @@ func classify(command string) (label, detail string) {
 			nonEmpty = true
 		}
 		if !segmentIsNoop(segment) {
-			return "", ""
+			return ""
 		}
 	}
 	if !nonEmpty {
-		return "", ""
+		return ""
 	}
 	for _, segment := range segments {
 		if head, ok := segmentHead(segment); ok && head == "sleep" {
-			return waitLabel, waitDetail
+			return waitLabel
 		}
 	}
-	return noopLabel, noopDetail
+	return noopLabel
 }

@@ -17,14 +17,19 @@ import (
 	"github.com/HappyOnigiri/hhx/internal/config"
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
 	"github.com/HappyOnigiri/hhx/internal/hooktest"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 	py "github.com/HappyOnigiri/hhx/internal/pycompat"
 )
 
-// 理由文の目印。
-const (
-	unresolved = "静的に特定できず"
-	failedMark = "作成に失敗"
+// 理由文の目印。「理由:」の 1 行目で、どちらの理由文かを見分ける（ラベルを含まず、JSON でエスケープされる文字も無い）。
+var (
+	unresolved = reasonMarker(denyUnresolved(hooktest.Language, "x"))
+	failedMark = reasonMarker(denyFailed(hooktest.Language, "x"))
 )
+
+func reasonMarker(reason string) string {
+	return strings.Split(reason, "\n")[2]
+}
 
 // snapshotAuthor は snapshot のコミットの作成者の表記である。
 const snapshotAuthor = "hhx <hhx@localhost>"
@@ -217,7 +222,7 @@ func checkProtected(t *testing.T, cwd string, commands ...string) {
 	t.Helper()
 	for _, command := range commands {
 		expectPass(t, command, cwd)
-		if len(discardLabels(command)) == 0 {
+		if len(discardRuleIDs(command)) == 0 {
 			t.Errorf("command %q matches no rule (nothing is saved)", command)
 		}
 	}
@@ -228,7 +233,7 @@ func checkUntouched(t *testing.T, cwd string, commands ...string) {
 	t.Helper()
 	for _, command := range commands {
 		expectPass(t, command, cwd)
-		if labels := discardLabels(command); len(labels) != 0 {
+		if labels := discardRuleIDs(command); len(labels) != 0 {
 			t.Errorf("command %q is not a discard, but matched %v", command, labels)
 		}
 	}
@@ -541,17 +546,17 @@ func TestDenyLabelAppearsInReason(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 	// discardRules の並び順で連結する。
-	if !strings.HasPrefix(got.Reason, "❌ ブロック: git reset --hard / git clean -f\n") {
+	if want := denyUnresolved(hooktest.Language, ruleLabels(hooktest.Language, []string{ruleResetHard, ruleClean})); got.Reason != want {
 		t.Errorf("reason %q", got.Reason)
 	}
 }
 
 // 回避を思いとどまらせるのは理由文だけなので、迂回路を案内せず、ユーザーに伝えるよう促す。
 func TestReasonsDoNotSuggestWorkarounds(t *testing.T) {
-	for _, reason := range []string{denyUnresolved("x"), denyFailed("x")} {
-		if !strings.Contains(reason, "ユーザーに伝えて") {
-			t.Errorf("reason must ask to report to the user: %q", reason)
-		}
+	for _, reason := range []string{
+		denyUnresolved(i18n.English, "x"), denyFailed(i18n.English, "x"),
+		denyUnresolved(i18n.Japanese, "x"), denyFailed(i18n.Japanese, "x"),
+	} {
 		// Claude Code と Codex の両方に出るので、片方にしか無いツール名を書かない。
 		for _, tool := range []string{"Write", "Edit", "apply_patch"} {
 			if strings.Contains(reason, tool) {
@@ -559,8 +564,10 @@ func TestReasonsDoNotSuggestWorkarounds(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(denyUnresolved("x"), "cp 退避や別コマンドでの迂回はスナップショットを作らない") {
-		t.Error("unresolved reason must rule out cp backups")
+	for _, language := range []i18n.Language{i18n.English, i18n.Japanese} {
+		if !strings.Contains(denyUnresolved(language, "x"), "cp ") {
+			t.Errorf("%s: unresolved reason must rule out cp backups", language)
+		}
 	}
 }
 
@@ -620,31 +627,31 @@ func TestDisabledByConfig(t *testing.T) {
 // Python の \s は Unicode の空白に一致し、$ は末尾の改行の直前にも一致する。期待値は移植元の Python 実装で求めたものである。
 func TestUnicodeSpacesAndNewlinesMatchPython(t *testing.T) {
 	cases := map[string][]string{
-		"git reset\u3000--hard":         {"git reset --hard"},
-		"git\u3000reset --hard":         {"git reset --hard"},
-		"echo x;\u00a0git clean -f":     {"git clean -f"},
-		"git reset --hard\u3000":        {"git reset --hard"},
-		"git clean\x1c-f":               {"git clean -f"},
-		"git checkout\u0085.":           {"git checkout (破棄形)"},
-		"git reset --hard\n":            {"git reset --hard"},
-		"git clean --force\n":           {"git clean -f"},
-		"git switch -f\n":               {"git switch (強制切り替え)"},
-		"git checkout .\n":              {"git checkout (破棄形)"},
+		"git reset\u3000--hard":         {ruleResetHard},
+		"git\u3000reset --hard":         {ruleResetHard},
+		"echo x;\u00a0git clean -f":     {ruleClean},
+		"git reset --hard\u3000":        {ruleResetHard},
+		"git clean\x1c-f":               {ruleClean},
+		"git checkout\u0085.":           {ruleCheckout},
+		"git reset --hard\n":            {ruleResetHard},
+		"git clean --force\n":           {ruleClean},
+		"git switch -f\n":               {ruleSwitch},
+		"git checkout .\n":              {ruleCheckout},
 		"git restore --staged\u3000foo": nil,
 		"git restore\u3000--staged foo": nil,
-		"git restore\u3000foo":          {"git restore (作業ツリー)"},
-		"git apply\u3000-R fix.patch":   {"git apply (破棄形)"},
-		"git apply -R\u2028fix.patch":   {"git apply (破棄形)"},
+		"git restore\u3000foo":          {ruleRestore},
+		"git apply\u3000-R fix.patch":   {ruleApply},
+		"git apply -R\u2028fix.patch":   {ruleApply},
 		"git apply --check\u00a0-R x":   nil,
-		"git -C\u3000/tmp reset --hard": {"git reset --hard"},
-		"rtk\u3000git reset --hard":     {"git reset --hard"},
-		"git reset --hard\r":            {"git reset --hard"},
+		"git -C\u3000/tmp reset --hard": {ruleResetHard},
+		"rtk\u3000git reset --hard":     {ruleResetHard},
+		"git reset --hard\r":            {ruleResetHard},
 		"git reset --hard\u200b":        nil, // U+200B は Python でも空白ではない
-		"git reset --hard\x1f":          {"git reset --hard"},
-		"git reset --hard\x0b":          {"git reset --hard"},
+		"git reset --hard\x1f":          {ruleResetHard},
+		"git reset --hard\x0b":          {ruleResetHard},
 	}
 	for command, want := range cases {
-		if got := discardLabels(command); !reflect.DeepEqual(got, want) {
+		if got := discardRuleIDs(command); !reflect.DeepEqual(got, want) {
 			t.Errorf("labels(%q) = %v, want %v", command, got, want)
 		}
 		if !gitCallRE.MatchString(command) {
@@ -666,18 +673,18 @@ func TestUnicodeSpacesAndNewlinesMatchPython(t *testing.T) {
 
 func TestDiscardRulesSingle(t *testing.T) {
 	for command, want := range map[string][]string{
-		"git reset --hard":   {"git reset --hard"},
-		"git checkout .":     {"git checkout (破棄形)"},
-		"git switch -f main": {"git switch (強制切り替え)"},
-		"git restore src/":   {"git restore (作業ツリー)"},
-		"git clean -fd":      {"git clean -f"},
-		"git apply -R x":     {"git apply (破棄形)"},
+		"git reset --hard":   {ruleResetHard},
+		"git checkout .":     {ruleCheckout},
+		"git switch -f main": {ruleSwitch},
+		"git restore src/":   {ruleRestore},
+		"git clean -fd":      {ruleClean},
+		"git apply -R x":     {ruleApply},
 	} {
-		if got := discardLabels(command); !reflect.DeepEqual(got, want) {
+		if got := discardRuleIDs(command); !reflect.DeepEqual(got, want) {
 			t.Errorf("labels(%q) = %v, want %v", command, got, want)
 		}
 	}
-	if got := discardLabels("git clean -f && git reset --hard"); !reflect.DeepEqual(got, []string{"git reset --hard", "git clean -f"}) {
+	if got := discardRuleIDs("git clean -f && git reset --hard"); !reflect.DeepEqual(got, []string{ruleResetHard, ruleClean}) {
 		t.Errorf("multiple rules: %v", got)
 	}
 }
@@ -687,7 +694,7 @@ func TestDiscardRulesNone(t *testing.T) {
 		"git status", "git stash", "git checkout main", "git switch main", "git restore --staged foo", "git clean -n",
 		"git reset --soft HEAD~1", "git checkout -b topic", "git switch -c topic", "ls -la",
 	} {
-		if got := discardLabels(command); len(got) != 0 {
+		if got := discardRuleIDs(command); len(got) != 0 {
 			t.Errorf("labels(%q) = %v, want none", command, got)
 		}
 	}
@@ -713,7 +720,7 @@ func TestEveryRuleSubcommandIsResolvable(t *testing.T) {
 			t.Errorf("no sample for %s", subcommand)
 			continue
 		}
-		if len(discardLabels(command)) == 0 {
+		if len(discardRuleIDs(command)) == 0 {
 			t.Errorf("%q matches no rule", command)
 		}
 		other := t.TempDir()
@@ -895,7 +902,7 @@ func TestPathologicalInputIsFast(t *testing.T) {
 	start := time.Now()
 	for _, command := range cases {
 		_, _ = resolveTargetDirs(command, f.a)
-		discardLabels(command)
+		discardRuleIDs(command)
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("took %v", elapsed)
@@ -1165,7 +1172,7 @@ func TestSnapshotParentIsHeadAndAuthorIsHook(t *testing.T) {
 	if got := gitRun(t, repo, "log", "-1", "--format=%cn <%ce>", snapshotRef); got != snapshotAuthor {
 		t.Errorf("committer = %q", got)
 	}
-	if got := gitRun(t, repo, "log", "-1", "--format=%s", snapshotRef); got != "wt-snapshot: git reset --hard @ "+repo {
+	if got := gitRun(t, repo, "log", "-1", "--format=%s", snapshotRef); got != "wt-snapshot: "+ruleResetHard+" @ "+repo {
 		t.Errorf("subject = %q", got)
 	}
 }
@@ -1180,7 +1187,7 @@ func TestSnapshotReflogAccumulates(t *testing.T) {
 		t.Error("second snapshot must move the ref")
 	}
 	reflog := strings.Split(gitRun(t, repo, "reflog", "show", snapshotRef), "\n")
-	if len(reflog) != 2 || !strings.Contains(reflog[0], "git clean -f") {
+	if len(reflog) != 2 || !strings.Contains(reflog[0], ruleClean) {
 		t.Errorf("reflog = %q", reflog)
 	}
 	// 古い方も reflog から辿れる。
@@ -1408,7 +1415,8 @@ func TestSnapshotParallelInvocations(t *testing.T) {
 		switch {
 		case output == "":
 			passed++
-		case !strings.Contains(output, `"deny"`) || !strings.Contains(output, failedMark):
+		// 設定を渡さないので英語の理由文になる。
+		case !strings.Contains(output, `"deny"`) || !strings.Contains(output, reasonMarker(denyFailed(i18n.English, "x"))):
 			t.Errorf("unexpected output: %q", output)
 		}
 	}

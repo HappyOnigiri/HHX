@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/HappyOnigiri/hhx/internal/config"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 )
 
 // maxInputSize は stdin から読む payload の上限である。超えた分は読まず、切り詰めた入力は hook に渡さない。
@@ -100,6 +101,11 @@ func (c *Context) Payload() (Payload, error) {
 	var payload Payload
 	err := json.Unmarshal(c.Input, &payload)
 	return payload, err
+}
+
+// Language は文面に使う表示言語を返す。設定を読むのは一次ゲートより後なので、ゲートで抜ける呼び出しは費用を払わない。
+func (c *Context) Language() i18n.Language {
+	return c.config.DisplayLanguage()
 }
 
 // Settings は設定ファイルにあるこの hook の mapping を value へ読み込む。設定が無ければ value を変えない。

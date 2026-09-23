@@ -34,6 +34,7 @@ import (
 
 	"github.com/HappyOnigiri/hhx/internal/hookexec"
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 	py "github.com/HappyOnigiri/hhx/internal/pycompat"
 	"github.com/HappyOnigiri/hhx/internal/toolresponse"
 )
@@ -121,11 +122,12 @@ func run(c *hookrt.Context) error {
 	var settings Settings
 	// 設定の型が違っても（install が報告する）、既定の文面で注意は出す。
 	_ = c.Settings(&settings)
-	instruction := defaultUpdateInstruction
+	language := c.Language()
+	instruction := messages.T(language, idDefaultInstruction)
 	if custom := strings.TrimSpace(settings.UpdateInstruction); custom != "" {
-		instruction = terminated(custom)
+		instruction = terminated(language, custom)
 	}
-	text, err := message(pullRequest, headlines, instruction)
+	text, err := message(language, pullRequest, headlines, instruction)
 	if err != nil {
 		return err
 	}
@@ -488,15 +490,15 @@ func digitValue(char rune) int {
 
 // message は注入する注意を組み立てる。
 // terminated は、文末の記号が無い案内に句点を足す。注入文では案内の直後に次の文が続き、句点が無いと 1 文につながるため。
-func terminated(sentence string) string {
+func terminated(language i18n.Language, sentence string) string {
 	last, _ := utf8.DecodeLastRuneInString(sentence)
-	if strings.ContainsRune("。．.！!？?", last) {
+	if strings.ContainsRune(sentenceEnders, last) {
 		return sentence
 	}
-	return sentence + "。"
+	return sentence + messages.T(language, idSentenceEnd)
 }
 
-func message(pullRequest map[string]any, headlines []any, instruction string) (string, error) {
+func message(language i18n.Language, pullRequest map[string]any, headlines []any, instruction string) (string, error) {
 	number, err := pyDecimal(pullRequest["number"])
 	if err != nil {
 		return "", err
@@ -513,13 +515,16 @@ func message(pullRequest map[string]any, headlines []any, instruction string) (s
 	}
 	listed := strings.Join(lines, "\n")
 	if len(headlines) > maxHeadlines {
-		listed += fmt.Sprintf(moreCommits, len(headlines)-maxHeadlines)
+		listed += messages.Text(language, idMoreCommits, map[string]any{"Count": len(headlines) - maxHeadlines})
 	}
 	url := pullRequest["url"]
 	if !toolresponse.Truthy(url) {
 		url = ""
 	}
-	return fmt.Sprintf(staleMessage, number, len(headlines), listed, instruction, toolresponse.PyStr(url)), nil
+	return messages.Text(language, idStale, map[string]any{
+		"Number": number, "Count": len(headlines), "Commits": listed, "Instruction": instruction,
+		"URL": toolresponse.PyStr(url),
+	}), nil
 }
 
 // pyDecimal は移植元の "%d" % (number or 0) である。整数でも小数でもない真の値は例外になる。

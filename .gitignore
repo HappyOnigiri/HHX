@@ -3,9 +3,6 @@
 /coverage/
 /tmp
 
-# 互換スイートの実行で Python が作るキャッシュ
-__pycache__/
-
 # agent CLIのローカル設定・ランタイム状態・ローカル専用スキル
 .claude/
 .agents/

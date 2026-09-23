@@ -103,12 +103,12 @@ func run(c *hookrt.Context) error {
 	if command == "" || !rmWordRE.MatchString(command) {
 		return nil
 	}
-	target, why, how, err := evaluate(command, py.Normpath(cwd))
+	found, err := evaluate(command, py.Normpath(cwd))
 	if err != nil {
 		return err
 	}
-	if target != "" {
-		c.Deny(reason(target, why, how))
+	if found.target != "" {
+		c.Deny(reason(c.Language(), found))
 	}
 	return nil
 }
@@ -137,50 +137,50 @@ func payloadFrom(raw []byte) (command, cwd string, err error) {
 	return command, cwd, nil
 }
 
-// evaluate は判定の本体で、拒否するなら対象の表記・理由・対応を返す。
+// evaluate は判定の本体で、拒否するなら発火した分岐（対象の表記・理由・対応のカタログの ID）を返す。
 // 判定順は組み込みの V7r 内の順序に合わせる。分岐 A/B/D（静的解決不能）を分岐 C（重要ディレクトリ・作業ディレクトリ）より
 // 先に見ないと、`cd sub && rm -rf ./*` が「作業ディレクトリごと」と誤って説明される。
-func evaluate(command, cwd string) (target, why, how string, err error) {
+func evaluate(command, cwd string) (finding, error) {
 	if kind, token, resolved := findUnresolvableTarget(command, cwd); kind != "" {
 		why, how := unresolvableReasons(kind)
-		return targetUnresolvable + " (" + shown(token, resolved) + ")", why, how, nil
+		return finding{target: idUnresolvable, token: shown(token, resolved), why: why, how: how}, nil
 	}
 	// --- REPORT 系（対象の書き換えが迂回路にしかならない） ---
 	kind, token, resolved, err := findProtectedPath(command, cwd)
 	if err != nil {
-		return "", "", "", err
+		return finding{}, err
 	}
-	switch label := " (" + shown(token, resolved) + ")"; kind {
+	switch token := shown(token, resolved); kind {
 	case "critical":
-		return targetCritical + label, whyCritical, howCritical, nil
+		return finding{target: idCritical, token: token, why: idWhyCritical, how: idHowCritical}, nil
 	case "cwd":
-		return targetCWD + label, whyCWD, howCWDItself, nil
+		return finding{target: idCWD, token: token, why: idWhyCWD, how: idHowCWDItself}, nil
 	case "workspace":
-		return targetAncestor + label, whyAncestor, howAncestor, nil
+		return finding{target: idAncestor, token: token, why: idWhyAncestor, how: idHowAncestor}, nil
 	}
 	// --- REWRITE 系（安全な書き直しがある） ---
 	if name, arg := findDangerousRemoval(command); name != "" {
-		return targetEmptyVar + name + " (" + arg + ")", whyEmptyVar, howEmptyVar, nil
+		return finding{target: idEmptyVar, command: name, token: arg, why: idWhyEmptyVar, how: idHowEmptyVar}, nil
 	}
 	if name, arg := findInSubstitution(command); name != "" {
-		return targetCmdsub + name + " (" + arg + ")", whyCmdsub, howCmdsub, nil
+		return finding{target: idCmdsub, command: name, token: arg, why: idWhyCmdsub, how: idHowCmdsub}, nil
 	}
 	if len(substitutions(command)) > maxSubstitutions {
-		return targetTooMany, whyTooMany, howTooMany, nil
+		return finding{target: idTooMany, why: idWhyTooMany, how: idHowTooMany}, nil
 	}
-	return "", "", "", nil
+	return finding{}, nil
 }
 
 func unresolvableReasons(kind string) (why, how string) {
 	switch kind {
 	case "cd":
-		return whyCD, howCD
+		return idWhyCD, idHowCD
 	case "cmdsub_glob":
-		return whyCmdsubGlob, howCmdsubGlob
+		return idWhyCmdsubGlob, idHowCmdsubGlob
 	case "shape":
-		return whyShape, howShape
+		return idWhyShape, idHowShape
 	default:
-		return whyGlob, howGlob
+		return idWhyGlob, idHowGlob
 	}
 }
 

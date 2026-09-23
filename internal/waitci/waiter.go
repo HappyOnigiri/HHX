@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 )
 
 // Clock は単調時計と sleep である。テストは sleep した分だけ進む時計に差し替える。
@@ -39,7 +41,8 @@ func elapsedSeconds(d time.Duration) int { return int(d / time.Second) }
 // lookupTimeout まで interval 間隔で引き直し、それでも空なら PR が無いとする。
 // 失敗は *NoPullRequestError か *FetchError で返す。
 func ResolvePR(
-	sha string, lookupTimeout, interval int, find func(string) (string, error), clock Clock, progress func(string),
+	language i18n.Language, sha string, lookupTimeout, interval int, find func(string) (string, error), clock Clock,
+	progress func(string),
 ) (string, error) {
 	start := clock.Now()
 	failures := 0
@@ -66,18 +69,21 @@ func ResolvePR(
 			if pending != nil {
 				return "", pending
 			}
-			detail := ""
-			if elapsed != 0 {
-				detail = fmt.Sprintf(" (%ds 再試行した)", elapsed)
+			text := func(language i18n.Language) string {
+				message := messages.Text(language, idNoPR, map[string]any{"SHA": sha})
+				if elapsed != 0 {
+					message += messages.Text(language, idNoPRRetried, map[string]any{"Seconds": elapsed})
+				}
+				return message
 			}
-			return "", &NoPullRequestError{Message: fmt.Sprintf("commit %s に open PR が無い%s", sha, detail)}
+			return "", &NoPullRequestError{Message: text(language), English: text(i18n.English)}
 		}
 		if progress != nil {
-			reason := "PR が見つからない"
+			reason := messages.T(language, idPRMissing)
 			if pending != nil {
-				reason = fmt.Sprintf("gh の呼び出しに失敗 (%d 回目)", failures)
+				reason = messages.Text(language, idGHFailedCount, map[string]any{"Count": failures})
 			}
-			progress(fmt.Sprintf("%ds commit %s の %s。再試行する", elapsed, sha, reason))
+			progress(messages.Text(language, idRetryLookup, map[string]any{"Elapsed": elapsed, "SHA": sha, "Reason": reason}))
 		}
 		clock.Sleep(seconds(interval))
 	}
@@ -99,6 +105,8 @@ type Waiter struct {
 	HasCI    func() (bool, error)
 	Clock    Clock
 	Progress func(string)
+	// Language は進捗の文面の表示言語である。零値は英語になる。
+	Language i18n.Language
 
 	// ciKnown は形跡の問い合わせの結果である。repo ごとに 1 回で足りる。nil は未実施。
 	ciKnown *bool
@@ -136,9 +144,9 @@ func (w *Waiter) Run() Outcome {
 			}
 			state.failures++
 			if !retryable || state.failures >= FetchFailureLimit {
-				return Outcome{Status: StatusError, Elapsed: elapsed, Message: err.Error()}
+				return Outcome{Status: StatusError, Elapsed: elapsed, Message: DisplayMessage(err)}
 			}
-			w.report(fmt.Sprintf("%ds gh の呼び出しに失敗 (%d 回目)", elapsed, state.failures))
+			w.report(messages.Text(w.Language, idFetchFailed, map[string]any{"Elapsed": elapsed, "Count": state.failures}))
 			w.Clock.Sleep(seconds(w.Interval))
 			continue
 		}
@@ -148,7 +156,9 @@ func (w *Waiter) Run() Outcome {
 		var outcome *Outcome
 		if !state.established && state.head != state.target {
 			// push が GitHub へ反映される前は、旧 commit の完了済み check が見える。
-			w.report(fmt.Sprintf("%ds head=%s が %s になるのを待つ", elapsed, orDefault(state.head, "?"), state.target))
+			w.report(messages.Text(w.Language, idWaitHead, map[string]any{
+				"Elapsed": elapsed, "Head": orDefault(state.head, "?"), "Target": state.target,
+			}))
 		} else {
 			elapsed, outcome = w.judge(state, now, elapsed)
 			if outcome != nil {
@@ -175,7 +185,7 @@ func (w *Waiter) judge(state *watchState, now time.Duration, elapsed int) (int, 
 		state.target = state.head
 	case state.head != "" && state.head != state.target:
 		// 監視中の別 push。新しい commit を対象にして測り直す。
-		w.report(fmt.Sprintf("head が %s -> %s へ変わった", state.target, state.head))
+		w.report(messages.Text(w.Language, idHeadChanged, map[string]any{"From": state.target, "To": state.head}))
 		state.target = state.head
 		state.start = now
 		elapsed = 0
@@ -257,7 +267,7 @@ func (w *Waiter) ciAbsent() bool {
 		if err != nil {
 			// 分からないときは「CI はある」側に倒す。ここで待ちを打ち切ると、
 			// 登録が遅れているだけの check を見ないまま成功で終わってしまう。
-			w.report(fmt.Sprintf("CI の有無を判定できない (%s)。待ちを続ける", err.Error()))
+			w.report(messages.Text(w.Language, idCIUnknown, map[string]any{"Error": DisplayMessage(err)}))
 			known = true
 		}
 		w.ciKnown = &known

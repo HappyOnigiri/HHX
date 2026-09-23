@@ -2,6 +2,8 @@ package waitci
 
 import (
 	"errors"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -79,7 +81,7 @@ func makeWaiter(responses []poll, configure ...func(*Waiter)) (*Waiter, *fakeClo
 			return Snapshot{Head: response.head, Mergeable: mergeable, Checks: Normalize(response.rollup)}, nil
 		},
 		Interval: 10, Timeout: 600, StartTimeout: 100, Settle: 20,
-		Clock: clock,
+		Clock: clock, Language: testLanguage,
 	}
 	for _, apply := range configure {
 		apply(waiter)
@@ -357,7 +359,7 @@ func TestNewPushSwitchesTheTarget(t *testing.T) {
 	if outcome.Status != StatusComplete || outcome.Head != "second" {
 		t.Fatalf("outcome=%+v", outcome)
 	}
-	if !reflect.DeepEqual(reports[:2], []string{"0s total=1 pending=0 settling", "head が first -> second へ変わった"}) {
+	if !reflect.DeepEqual(reports[:2], []string{"0s total=1 pending=0 settling", messages.Text(testLanguage, idHeadChanged, map[string]any{"From": "first", "To": "second"})}) {
 		t.Fatalf("reports=%q", reports)
 	}
 }
@@ -398,7 +400,7 @@ func TestTransientFailuresDoNotEndTheWatch(t *testing.T) {
 	if outcome := waiter.Run(); outcome.Status != StatusComplete {
 		t.Fatalf("outcome=%+v", outcome)
 	}
-	if reports[0] != "0s gh の呼び出しに失敗 (1 回目)" {
+	if reports[0] != messages.Text(testLanguage, idFetchFailed, map[string]any{"Elapsed": 0, "Count": 1}) {
 		t.Fatalf("reports=%q", reports)
 	}
 }
@@ -447,8 +449,8 @@ func TestProgressReportsEveryPoll(t *testing.T) {
 	), func(w *Waiter) { w.SHA = "sha"; w.Progress = func(text string) { reports = append(reports, text) } })
 	waiter.Run()
 	want := []string{
-		"0s head=old が sha になるのを待つ",
-		"10s head=? が sha になるのを待つ",
+		messages.Text(testLanguage, idWaitHead, map[string]any{"Elapsed": 0, "Head": "old", "Target": "sha"}),
+		messages.Text(testLanguage, idWaitHead, map[string]any{"Elapsed": 10, "Head": "?", "Target": "sha"}),
 		"0s total=1 pending=1",
 		"10s total=1 pending=0 settling",
 		"20s total=1 pending=0 settling",
@@ -507,7 +509,7 @@ func runResolve(t *testing.T, results []any, lookupTimeout, interval int) (strin
 		}
 		return result.(string), nil
 	}
-	number, err := ResolvePR(strings.Repeat("A", 40), lookupTimeout, interval, find, clock, nil)
+	number, err := ResolvePR(testLanguage, strings.Repeat("A", 40), lookupTimeout, interval, find, clock, nil)
 	return number, count, clock, err
 }
 
@@ -528,7 +530,7 @@ func TestPRFoundAtOnceDoesNotWait(t *testing.T) {
 func TestStillMissingAfterTheTimeoutIsNoPullRequest(t *testing.T) {
 	_, count, _, err := runResolve(t, []any{&NoPullRequestError{Message: "no open PR"}}, 30, 10)
 	var noPR *NoPullRequestError
-	if !errors.As(err, &noPR) || noPR.Message != "commit "+strings.Repeat("A", 40)+" に open PR が無い (30s 再試行した)" {
+	if !errors.As(err, &noPR) || noPR.Message != messages.Text(testLanguage, idNoPR, map[string]any{"SHA": strings.Repeat("A", 40)})+messages.Text(testLanguage, idNoPRRetried, map[string]any{"Seconds": 30}) {
 		t.Fatalf("err=%v", err)
 	}
 	// 0s, 10s, 20s, 30s の 4 回。30s + 10 > 30 なので待たずに確定する。
@@ -544,7 +546,7 @@ func TestZeroTimeoutTriesExactlyOnce(t *testing.T) {
 		t.Fatalf("err=%v count=%d", err, count)
 	}
 	// 待たずに確定したときは再試行の秒数を書かない。
-	if strings.Contains(noPR.Message, "再試行した") {
+	if noPR.Message != messages.Text(testLanguage, idNoPR, map[string]any{"SHA": strings.Repeat("A", 40)}) {
 		t.Fatalf("message=%q", noPR.Message)
 	}
 }
@@ -589,14 +591,17 @@ func TestLookupReportsEachRetry(t *testing.T) {
 	clock := &fakeClock{}
 	results := []error{&NoPullRequestError{Message: "x"}, &FetchError{Message: "y", Retryable: true}}
 	count := 0
-	_, _ = ResolvePR("abc", 60, 10, func(string) (string, error) {
+	_, _ = ResolvePR(testLanguage, "abc", 60, 10, func(string) (string, error) {
 		if count < len(results) {
 			count++
 			return "", results[count-1]
 		}
 		return "7", nil
 	}, clock, func(text string) { reports = append(reports, text) })
-	want := []string{"0s commit abc の PR が見つからない。再試行する", "10s commit abc の gh の呼び出しに失敗 (1 回目)。再試行する"}
+	want := []string{
+		messages.Text(testLanguage, idRetryLookup, map[string]any{"Elapsed": 0, "SHA": "abc", "Reason": messages.T(testLanguage, idPRMissing)}),
+		messages.Text(testLanguage, idRetryLookup, map[string]any{"Elapsed": 10, "SHA": "abc", "Reason": messages.Text(testLanguage, idGHFailedCount, map[string]any{"Count": 1})}),
+	}
 	if !reflect.DeepEqual(reports, want) {
 		t.Fatalf("reports=%q", reports)
 	}
@@ -662,7 +667,7 @@ func TestUndecidableEvidenceKeepsWaiting(t *testing.T) {
 	}
 	found := false
 	for _, report := range reports {
-		found = found || report == "CI の有無を判定できない (gh が落ちた)。待ちを続ける"
+		found = found || report == messages.Text(testLanguage, idCIUnknown, map[string]any{"Error": "gh が落ちた"})
 	}
 	if !found {
 		t.Fatalf("reports=%q", reports)
@@ -732,3 +737,6 @@ func TestMarkerMatchesTheMessageGHPrints(t *testing.T) {
 		t.Fatalf("err=%#v", err)
 	}
 }
+
+// testLanguage はテストを流す表示言語である（hook のテストと同じ環境変数で選ぶ）。
+var testLanguage = i18n.Normalize(os.Getenv("HHX_TEST_LANGUAGE"))

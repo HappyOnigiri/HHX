@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/HappyOnigiri/hhx/internal/hooktest"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 )
 
 func TestMain(m *testing.M) {
@@ -196,11 +197,11 @@ func TestStateFailureWarnsAndStillInjects(t *testing.T) {
 	hooktest.WriteFile(t, invalid, "file\n")
 	t.Setenv("XDG_CACHE_HOME", invalid)
 	injection := f.run(t, payloadOptions{})
-	mustContain(t, injection.SystemMessage, warningPrefix, "状態ファイルを利用できない")
+	mustContain(t, injection.SystemMessage, warningPrefix, warningKind(idStateClaim))
 	mustContain(t, injection.Context, "root-local")
-	mustContain(t, f.run(t, payloadOptions{event: "SubagentStart"}).SystemMessage, "状態ファイルから読込済みルールを復元できない")
+	mustContain(t, f.run(t, payloadOptions{event: "SubagentStart"}).SystemMessage, warningKind(idStateStored))
 	compact := f.run(t, payloadOptions{event: "SessionStart", source: "compact"})
-	mustContain(t, compact.SystemMessage, "状態ファイルから読込済みルールを復元できない", "compact後の状態ファイル更新に失敗")
+	mustContain(t, compact.SystemMessage, warningKind(idStateStored), warningKind(idStateReplace))
 }
 
 func TestRuleReadFailureWarnsAndKeepsOtherContext(t *testing.T) {
@@ -209,20 +210,20 @@ func TestRuleReadFailureWarnsAndKeepsOtherContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	injection := f.run(t, payloadOptions{})
-	mustContain(t, injection.SystemMessage, "ルールを読み込めない ("+f.repo+"/src/AGENTS.local.md)")
+	mustContain(t, injection.SystemMessage, messages.Text(hooktest.Language, idReadRule, map[string]any{"Path": f.repo + "/src/AGENTS.local.md", "Error": ""}))
 	mustContain(t, injection.Context, "root-local")
 }
 
 func TestInvalidInputWarns(t *testing.T) {
 	newFixture(t)
 	for raw, want := range map[string]string{
-		"not-json":                          "hook入力を解析できない",
-		"":                                  "hook入力を解析できない",
-		"{} x":                              "hook入力を解析できない",
-		"\xff":                              "hook入力を解析できない",
-		"[]":                                "hook入力がJSON objectではない",
-		"null":                              "hook入力がJSON objectではない",
-		`{"hook_event_name": "PreToolUse"}`: "cwd がないため対象パスを判定できない",
+		"not-json":                          warningKind(idInvalidInput),
+		"":                                  warningKind(idInvalidInput),
+		"{} x":                              warningKind(idInvalidInput),
+		"\xff":                              warningKind(idInvalidInput),
+		"[]":                                warningKind(idNotObject),
+		"null":                              warningKind(idNotObject),
+		`{"hook_event_name": "PreToolUse"}`: warningKind(idNoCwd),
 	} {
 		injection := runRaw(t, raw)
 		if injection.Event != "" || !strings.Contains(injection.SystemMessage, want) {
@@ -237,13 +238,13 @@ func TestMissingSessionIDDisablesDeduplication(t *testing.T) {
 	for range 2 {
 		injection := runRaw(t, raw)
 		mustContain(t, injection.Context, "src-local")
-		mustContain(t, injection.SystemMessage, "session_id がないため重複抑止を無効化")
+		mustContain(t, injection.SystemMessage, warningKind(idNoSessionClaim))
 	}
 	subagent := runRaw(t, string(mustJSON(map[string]any{"hook_event_name": "SubagentStart", "cwd": f.repo})))
-	mustContain(t, subagent.SystemMessage, "session_id がないため読込済みルールを復元できない")
+	mustContain(t, subagent.SystemMessage, warningKind(idNoSessionStored))
 	// compact は記録を置き換えないので、復元できない警告だけを出す。
 	compact := runRaw(t, string(mustJSON(map[string]any{"hook_event_name": "SessionStart", "source": "compact", "cwd": f.repo})))
-	if compact.SystemMessage != warningPrefix+warningNoSessionStored {
+	if compact.SystemMessage != warningPrefix+messages.T(hooktest.Language, idNoSessionStored) {
 		t.Fatalf("compact: %+v", compact)
 	}
 }
@@ -363,9 +364,9 @@ func TestContextLimit(t *testing.T) {
 	injection := f.run(t, payloadOptions{})
 	mustContain(t, injection.Context, "root-local")
 	mustNotContain(t, injection.Context, "xxxx")
-	mustContain(t, injection.SystemMessage, "context上限 32768 bytes のため未注入: "+f.repo+"/src/AGENTS.local.md")
+	mustContain(t, injection.SystemMessage, messages.Text(hooktest.Language, idContextLimit, map[string]any{"Limit": 32768, "Path": f.repo + "/src/AGENTS.local.md"}))
 	// 未注入のルールは記録しないので、次の呼び出しでも警告する。
-	mustContain(t, f.run(t, payloadOptions{}).SystemMessage, "context上限")
+	mustContain(t, f.run(t, payloadOptions{}).SystemMessage, strings.Fields(messages.Text(hooktest.Language, idContextLimit, map[string]any{"Limit": 32768, "Path": ""}))[0])
 }
 
 func TestLockTimeoutFallsBack(t *testing.T) {
@@ -379,7 +380,7 @@ func TestLockTimeoutFallsBack(t *testing.T) {
 	defer unlock()
 	started := time.Now()
 	injection := f.run(t, payloadOptions{})
-	mustContain(t, injection.SystemMessage, "状態ファイルを利用できないため重複抑止を無効化", "timed out")
+	mustContain(t, injection.SystemMessage, warningKind(idStateClaim), "timed out")
 	mustContain(t, injection.Context, "root-local")
 	if elapsed := time.Since(started); elapsed < lockTimeout || elapsed > lockTimeout+5*time.Second {
 		t.Fatalf("waited %s", elapsed)
@@ -411,10 +412,10 @@ func mustJSON(value any) []byte {
 // --- 部品 ----------------------------------------------------------------------
 
 func TestWarningText(t *testing.T) {
-	if got := warningText(nil); got != "" {
+	if got := warningText(texts{hooktest.Language}, nil); got != "" {
 		t.Errorf("no warnings: %q", got)
 	}
-	if got := warningText([]string{" a\n b ", "", "  ", "c", "d", "e", "f"}); got != warningPrefix+"a b; c; d; ほか 2 件" {
+	if got := warningText(texts{hooktest.Language}, []string{" a\n b ", "", "  ", "c", "d", "e", "f"}); got != warningPrefix+"a b; c; d; "+messages.Text(hooktest.Language, idMore, map[string]any{"Count": 2}) {
 		t.Errorf("warningText=%q", got)
 	}
 }
@@ -499,4 +500,15 @@ func TestCommandPathValues(t *testing.T) {
 	if values := commandPathValues("echo 'unterminated"); len(values) != 0 {
 		t.Fatalf("an unterminated quote must add no tokens: %v", values)
 	}
+}
+
+// warningKind は警告の種類を見分ける部分（差し込みより前の文面）を、テストを流す言語でカタログから引く。
+func warningKind(id string) string {
+	entry := messages[id]
+	text := entry.EN
+	if hooktest.Language == i18n.Japanese {
+		text = entry.JA
+	}
+	kind, _, _ := strings.Cut(text, "{{")
+	return strings.TrimRight(kind, " :(")
 }

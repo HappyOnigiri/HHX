@@ -10,13 +10,13 @@ import (
 	"github.com/HappyOnigiri/hhx/internal/hooktest"
 )
 
-// 理由文に出るラベル（どのルールが発火したかの判別用）。
-const (
-	labelPRMerge = "gh pr merge"
-	labelAPI     = "マージエンドポイント"
-	labelGraphQL = "GraphQL"
-	labelHTTP    = "HTTP クライアント"
-	labelFetch   = "git fetch origin pull"
+// 理由文に出るラベル（どのルールが発火したかの判別用）。テストを流す言語でカタログから引く。
+var (
+	labelPRMerge = messages.T(hooktest.Language, idTargetPRMerge)
+	labelAPI     = messages.T(hooktest.Language, idTargetAPI)
+	labelGraphQL = messages.T(hooktest.Language, idTargetGraphQL)
+	labelHTTP    = messages.T(hooktest.Language, idTargetHTTP)
+	labelFetch   = messages.T(hooktest.Language, idTargetFetch)
 )
 
 // 実行者のシェルで開錠されたままだと拒否のテストが全滅して気付きにくいので、先に外す。
@@ -287,10 +287,8 @@ func TestOutputSchema(t *testing.T) {
 	if got.Decision != hooktest.Deny {
 		t.Fatalf("decision=%q", got.Decision)
 	}
-	for _, part := range []string{"❌ ブロック: gh pr merge\n\n", "理由:", "対応:"} {
-		if !strings.Contains(got.Reason, part) {
-			t.Errorf("reason %q does not contain %q", got.Reason, part)
-		}
+	if want := reason(hooktest.Language, idTargetPRMerge); got.Reason != want {
+		t.Errorf("reason=%q, want %q", got.Reason, want)
 	}
 }
 

@@ -1,5 +1,4 @@
 GO ?= go
-PYTHON ?= python3
 INSTALL_DIR ?= $(HOME)/.local/bin
 RELEASE_DIR ?= artifacts/release
 # バージョンの真実源はリリースタグ（vX.Y.Z）である。タグを取得していない checkout ではコミットへ退避する。
@@ -13,7 +12,7 @@ GO_COVERAGE_PACKAGES := ./cmd/hhx ./internal/config ./internal/hookrt ./internal
 	./internal/hooks/githookspathguard ./internal/hooks/irreversibleguard ./internal/hooks/dangerousrmguard \
 	./internal/hooks/discardguard ./internal/hooks/exitplansubagentguard ./internal/waitci \
 	./internal/hooks/pushcicontext ./internal/hooks/prbodystaleness ./internal/hooks/prcontext \
-	./internal/hooks/agentslocalcontext ./internal/hookexec ./internal/hookcache ./internal/toolresponse
+	./internal/hooks/agentslocalcontext ./internal/hookexec ./internal/hookcache ./internal/toolresponse ./internal/i18n
 GOLANGCI_LINT_VERSION := $(shell awk '$$1 == "golangci-lint" { print $$2 }' .tool-versions)
 GOLANGCI_LINT := bin/golangci-lint
 # CI は CITEST に citest のパスを渡し、落ちたテストだけを 1 回再実行して報告を CI_TEST_ARTIFACT_DIR に残す。
@@ -26,7 +25,7 @@ CI_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 CI_MAKEFLAGS := -j$(CI_JOBS) --keep-going $(if $(filter output-sync,$(.FEATURES)),--output-sync=target)
 
 .PHONY: build install fmt lint go-lint go-deadcode mod-tidy-check markdown-lint reporter-check test test-race-coverage \
-	version-check release release-check install-test uninstall-test compat-test ci ci-checks check $(GOLANGCI_LINT)
+	version-check release release-check install-test uninstall-test test-ja ci ci-checks $(GOLANGCI_LINT)
 
 build:
 	mkdir -p bin
@@ -68,6 +67,10 @@ reporter-check:
 
 test:
 	$(GO) test -shuffle=on -count=1 ./...
+
+# 同じテストを日本語の表示（language: ja）でも流す。判定は言語で変わらず、文面はカタログどおりであることを確かめる。
+test-ja:
+	HHX_TEST_LANGUAGE=ja $(GO) test -shuffle=on -count=1 ./...
 
 # race 有効の 1 回の実行で、テストの成否とカバレッジの閾値の両方を確かめる。
 test-race-coverage:
@@ -119,17 +122,8 @@ uninstall-test:
 	bash -n scripts/test-uninstall.sh
 	bash scripts/test-uninstall.sh
 
-# 移行期間だけ置く互換スイート。既定では bin/hhx を対象にし、未移植の hook は skip する。
-# Python 実装と比べるときは HHX_COMPAT_TARGET=python と HHX_COMPAT_PYTHON_HOOKS を渡す。
-# 元の Python 実装を参照するので、ci と CI には含めない。
-compat-test: build
-	HHX_BIN="$(CURDIR)/bin/hhx" $(PYTHON) -m unittest discover -s compat -t compat
-
 ci:
 	$(MAKE) $(CI_MAKEFLAGS) ci-checks
 
 # どのチェックも読み取り専用か、自分の出力先（bin/ と一時ディレクトリ）にしか書かないので、並行して実行できる。
-ci-checks: version-check release-check install-test uninstall-test lint reporter-check test-race-coverage mod-tidy-check
-
-# 手元の総合確認。CI と同じ検査に互換スイートを足す。
-check: ci compat-test
+ci-checks: version-check release-check install-test uninstall-test lint reporter-check test-race-coverage test-ja mod-tidy-check

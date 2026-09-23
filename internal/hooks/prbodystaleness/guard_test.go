@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/HappyOnigiri/hhx/internal/config"
+	"github.com/HappyOnigiri/hhx/internal/hookrt"
 	"github.com/HappyOnigiri/hhx/internal/hooktest"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 )
 
 func TestMain(m *testing.M) {
@@ -133,13 +135,10 @@ func TestCommitAfterTheBodyInjectsAWarning(t *testing.T) {
 	if !ok {
 		t.Fatal("a commit after the body must inject")
 	}
-	want := "push が成功した。PR #10088 の本文は、以下 1 件のコミットより前に書かれている。\n" +
-		"  - feat: 交換のメモを後から入力できるようにする\n" +
-		"- 本文の記述とこれらのコミットの内容が食い違っていないか確認すること" +
-		"（本文に無い挙動が増えていないか、本文が「やる」と書いた内容が変わっていないか）。\n" +
-		"- 食い違いがあれば update-pr スキル（プロジェクトに `local-*` 版があればそちら）で本文を更新する。" +
-		"差分と一致していれば更新は不要で、その旨だけ報告すればよい。\n" +
-		"- PR: https://github.com/o/r/pull/10088"
+	want := messages.Text(hooktest.Language, idStale, map[string]any{
+		"Number": "10088", "Count": 1, "Commits": "  - feat: 交換のメモを後から入力できるようにする",
+		"Instruction": messages.T(hooktest.Language, idDefaultInstruction), "URL": "https://github.com/o/r/pull/10088",
+	})
 	if context != want {
 		t.Fatalf("context=\n%s\nwant\n%s", context, want)
 	}
@@ -163,13 +162,14 @@ func TestUpdateInstructionCanBeReplaced(t *testing.T) {
 	f := newFixture(t)
 	config := "hooks:\n  pr-body-staleness:\n    update-instruction: \"食い違いがあれば `gh pr edit` で本文を直す。\"\n"
 	context, _ := f.run(t, call{config: config})
-	if !strings.Contains(context, "\n- 食い違いがあれば `gh pr edit` で本文を直す。差分と一致していれば") || strings.Contains(context, "update-pr") {
+	if !strings.Contains(context, "\n- 食い違いがあれば `gh pr edit` で本文を直す。"+afterInstruction()) || strings.Contains(context, "update-pr") {
 		t.Fatalf("the instruction was not replaced:\n%s", context)
 	}
 	for value, want := range map[string]string{
-		"gh pr edit で本文を直す":                "\n- gh pr edit で本文を直す。差分と一致していれば",
-		"  gh pr edit で本文を直す！  ":           "\n- gh pr edit で本文を直す！差分と一致していれば",
-		"Update the body with gh pr edit.": "\n- Update the body with gh pr edit.差分と一致していれば",
+		// 文末の記号が無ければ、表示言語の句点を足す。
+		"gh pr edit で本文を直す":                "\n- gh pr edit で本文を直す" + messages.T(hooktest.Language, idSentenceEnd) + afterInstruction(),
+		"  gh pr edit で本文を直す！  ":           "\n- gh pr edit で本文を直す！" + afterInstruction(),
+		"Update the body with gh pr edit.": "\n- Update the body with gh pr edit." + afterInstruction(),
 	} {
 		context, _ := f.run(t, call{config: "hooks:\n  pr-body-staleness:\n    update-instruction: \"" + value + "\"\n"})
 		if !strings.Contains(context, want) {
@@ -182,7 +182,7 @@ func TestUpdateInstructionCanBeReplaced(t *testing.T) {
 		"hooks:\n  pr-body-staleness:\n    enabled: true\n",
 	} {
 		context, _ := f.run(t, call{config: config})
-		if !strings.Contains(context, defaultUpdateInstruction) {
+		if !strings.Contains(context, messages.T(hooktest.Language, idDefaultInstruction)) {
 			t.Errorf("config %q must fall back to the default instruction:\n%s", config, context)
 		}
 	}
@@ -236,7 +236,8 @@ func TestManyCommitsAreSummarized(t *testing.T) {
 	}
 	f.gh.Write(t, "graphql.json", graphql(pullRequest(map[string]any{"commits": map[string]any{"nodes": nodes}})))
 	context, _ := f.run(t, call{})
-	if !strings.Contains(context, "以下 7 件の") || !strings.Contains(context, "  - c6\n  - c5\n  - c4\n  - c3\n  - c2\n  - (ほか 2 件)\n") {
+	more := messages.Text(hooktest.Language, idMoreCommits, map[string]any{"Count": 2})
+	if !strings.Contains(context, countText(7)) || !strings.Contains(context, "  - c6\n  - c5\n  - c4\n  - c3\n  - c2"+more+"\n") {
 		t.Fatalf("context:\n%s", context)
 	}
 }
@@ -354,15 +355,15 @@ func TestLooseGitHubResponsesFollowPython(t *testing.T) {
 		pr   map[string]any
 		want string
 	}{
-		"float number":        {map[string]any{"number": 12.9}, "PR #12 の本文"},
-		"no number":           {map[string]any{"number": nil}, "PR #0 の本文"},
+		"float number":        {map[string]any{"number": 12.9}, "PR #12 "},
+		"no number":           {map[string]any{"number": nil}, "PR #0 "},
 		"no url":              {map[string]any{"url": nil}, "- PR: "},
 		"missing parents":     {map[string]any{"commits": map[string]any{"nodes": []any{map[string]any{"commit": map[string]any{"committedDate": after, "messageHeadline": "m"}}}}}, "  - m\n"},
 		"missing headline":    {map[string]any{"commits": map[string]any{"nodes": []any{map[string]any{"commit": map[string]any{"committedDate": after}}}}}, "  - \n"},
 		"empty commit":        {map[string]any{"commits": map[string]any{"nodes": []any{nil, map[string]any{}, commit(after, "x", 1)}}}, "  - x\n"},
 		"bool parent count":   {map[string]any{"commits": map[string]any{"nodes": []any{commit(after, "b", 1)}}}, "  - b\n"},
-		"fractional seconds":  {map[string]any{"lastEditedAt": "2026-09-10T07:10:57.999Z"}, "以下 1 件"},
-		"sixth headline type": {map[string]any{"commits": map[string]any{"nodes": sixCommitsWithListFirst()}}, "(ほか 1 件)"},
+		"fractional seconds":  {map[string]any{"lastEditedAt": "2026-09-10T07:10:57.999Z"}, countText(1)},
+		"sixth headline type": {map[string]any{"commits": map[string]any{"nodes": sixCommitsWithListFirst()}}, messages.Text(hooktest.Language, idMoreCommits, map[string]any{"Count": 1})},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
@@ -531,5 +532,54 @@ func TestMatchOrigin(t *testing.T) {
 func TestGate(t *testing.T) {
 	if !gate([]byte("git PUSH")) || gate([]byte("git status")) {
 		t.Fatal("the gate must look for push case-insensitively")
+	}
+}
+
+// afterInstruction は注入文のうち、本文の更新方法の案内の直後に続く文の書き出しである。
+func afterInstruction() string {
+	entry := messages[idStale]
+	text := entry.EN
+	if hooktest.Language == i18n.Japanese {
+		text = entry.JA
+	}
+	_, after, _ := strings.Cut(text, "{{.Instruction}}")
+	line, _, _ := strings.Cut(after, "\n")
+	return line[:min(len(line), 10)]
+}
+
+// countText は注入文の 1 行目のうち、コミットの件数を含む部分である。
+func countText(count int) string {
+	line, _, _ := strings.Cut(messages.Text(hooktest.Language, idStale, map[string]any{
+		"Number": "1", "Count": count, "Commits": "", "Instruction": "", "URL": "",
+	}), "\n")
+	_, after, _ := strings.Cut(line, "PR #1")
+	return after
+}
+
+// 英語は日本語より長くなりやすい。見出しを上限まで並べても、Codex の additionalContextLimit に収まること。
+func TestMessageFitsTheCodexContextLimit(t *testing.T) {
+	limit := 0
+	for _, registration := range Definition().Registrations {
+		if registration.Agent == hookrt.Codex {
+			limit = registration.AdditionalContextLimit
+		}
+	}
+	if limit == 0 {
+		t.Fatal("the Codex registration must set additionalContextLimit")
+	}
+	// GitHub のコミットの見出しは 1 行で、表示は長くても 100 文字ほどで切られる。見出しを長めに取って上限まで並べる。
+	var headlines []any
+	for range maxHeadlines + 3 {
+		headlines = append(headlines, strings.Repeat("h", 120))
+	}
+	pr := map[string]any{"number": json.Number("123456"), "url": "https://github.com/" + strings.Repeat("o", 39) + "/" + strings.Repeat("r", 100) + "/pull/123456"}
+	for _, language := range []i18n.Language{i18n.English, i18n.Japanese} {
+		text, err := message(language, pr, headlines, messages.T(language, idDefaultInstruction))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(text) > limit {
+			t.Errorf("%s: %d bytes, over the limit %d", language, len(text), limit)
+		}
 	}
 }

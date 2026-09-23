@@ -27,6 +27,7 @@
 package waitci
 
 import (
+	"errors"
 	"regexp"
 	"sort"
 	"strconv"
@@ -61,19 +62,43 @@ var fatalMarkers = []string{
 }
 
 // FetchError は gh の呼び出しの失敗である。Retryable が偽なら待っても直らない。
+// Message は表示言語の文面、English は同じ文面の英語である。Error() はログとテストのため英語を返す
+// （gh の stderr をそのまま持つときは English を空にし、Message を返す）。
 type FetchError struct {
 	Message   string
+	English   string
 	Retryable bool
 }
 
-func (e *FetchError) Error() string { return e.Message }
+func (e *FetchError) Error() string { return englishOr(e.English, e.Message) }
 
-// NoPullRequestError は対象に PR が無いことを表す。
+// NoPullRequestError は対象に PR が無いことを表す。Message と English の扱いは FetchError と同じ。
 type NoPullRequestError struct {
 	Message string
+	English string
 }
 
-func (e *NoPullRequestError) Error() string { return e.Message }
+func (e *NoPullRequestError) Error() string { return englishOr(e.English, e.Message) }
+
+func englishOr(english, message string) string {
+	if english != "" {
+		return english
+	}
+	return message
+}
+
+// DisplayMessage は err を表示するときの文面を返す。FetchError と NoPullRequestError は表示言語の Message を使う。
+func DisplayMessage(err error) string {
+	var fetchErr *FetchError
+	if errors.As(err, &fetchErr) {
+		return fetchErr.Message
+	}
+	var noPR *NoPullRequestError
+	if errors.As(err, &noPR) {
+		return noPR.Message
+	}
+	return err.Error()
+}
 
 // Check は 1 件の check の正規化した状態である。
 type Check struct {

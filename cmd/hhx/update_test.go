@@ -56,7 +56,7 @@ func TestUpdateIsDisabledForDevelopmentBuilds(t *testing.T) {
 	fake := &fakeUpdate{}
 	installFakeUpdate(t, fake)
 	code, stdout, _ := runCommand(t, "", "update", "--apply")
-	if code != 0 || !strings.Contains(stdout, "development build") {
+	if code != 0 || stdout != messages.Text(testLanguage, idDevelopment, map[string]any{"Version": "v1.0.0"})+"\n" {
 		t.Fatalf("code=%d stdout=%q", code, stdout)
 	}
 	if fake.checked || fake.appliedTag != "" {
@@ -68,8 +68,9 @@ func TestUpdateReportsAnAvailableRelease(t *testing.T) {
 	fake := &fakeUpdate{releaseBuild: true, latest: newerRelease(), supported: true}
 	installFakeUpdate(t, fake)
 	code, stdout, _ := runCommand(t, "", "update")
-	if code != 0 || !strings.Contains(stdout, "hhx v1.1.0 is available (current: v1.0.0)") ||
-		!strings.Contains(stdout, "hhx update --apply") {
+	if code != 0 || stdout != messages.Text(testLanguage, idAvailable, map[string]any{
+		"Latest": "v1.1.0", "Version": "v1.0.0", "URL": newerRelease().URL,
+	}) || !strings.Contains(stdout, "hhx update --apply") {
 		t.Fatalf("code=%d stdout=%q", code, stdout)
 	}
 	if fake.appliedTag != "" {
@@ -81,7 +82,8 @@ func TestUpdateReportsUpToDate(t *testing.T) {
 	fake := &fakeUpdate{releaseBuild: true, latest: update.Release{Tag: "v1.0.0"}, supported: true}
 	installFakeUpdate(t, fake)
 	code, stdout, _ := runCommand(t, "", "update", "--apply")
-	if code != 0 || !strings.Contains(stdout, "up to date") || fake.appliedTag != "" {
+	if code != 0 || !strings.Contains(stdout, messages.Text(testLanguage, idUpToDate, map[string]any{"Version": "v1.0.0"})) ||
+		fake.appliedTag != "" {
 		t.Fatalf("code=%d stdout=%q applied=%q", code, stdout, fake.appliedTag)
 	}
 }
@@ -94,7 +96,7 @@ func TestUpdateCheckFailures(t *testing.T) {
 		want     string
 	}{
 		{name: "rate limited", err: update.ErrRateLimited, wantCode: 1, want: "rate limit"},
-		{name: "no release", err: update.ErrUnavailable, wantCode: 0, want: "no release has been published yet"},
+		{name: "no release", err: update.ErrUnavailable, wantCode: 0, want: messages.Text(testLanguage, idNoReleaseYet, map[string]any{"Version": "v1.0.0"})},
 		{name: "network", err: errors.New("dial tcp: connection refused"), wantCode: 1, want: "connection refused"},
 	}
 	for _, test := range tests {
@@ -120,7 +122,8 @@ func TestUpdateApplyRunsTheInstaller(t *testing.T) {
 	if code != 0 || fake.appliedTag != "v1.1.0" {
 		t.Fatalf("code=%d applied=%q stderr=%q", code, fake.appliedTag, stderr)
 	}
-	if !strings.Contains(stdout, "Installed hhx v1.1.0") || strings.Contains(stdout, "Note:") {
+	if !strings.Contains(stdout, "Installed hhx v1.1.0") || strings.Contains(stdout, "/opt/tools") ||
+		strings.Contains(stdout, messages.Text(testLanguage, idOtherOnPath, map[string]any{"OnPath": "/Users/alice/.local/bin/hhx", "Path": "/Users/alice/.local/bin/hhx"})) {
 		t.Fatalf("stdout=%q", stdout)
 	}
 }
@@ -132,7 +135,9 @@ func TestUpdateApplyWarnsWhenPathUsesAnotherBinary(t *testing.T) {
 		onPath:  "/opt/tools/hhx",
 	})
 	code, stdout, _ := runCommand(t, "", "update", "--apply")
-	if code != 0 || !strings.Contains(stdout, "hhx on PATH is /opt/tools/hhx") {
+	if code != 0 || !strings.Contains(stdout, messages.Text(testLanguage, idOtherOnPath, map[string]any{
+		"OnPath": "/opt/tools/hhx", "Path": "/Users/alice/.local/bin/hhx",
+	})) {
 		t.Fatalf("code=%d stdout=%q", code, stdout)
 	}
 }
@@ -152,7 +157,7 @@ func TestUpdateApplyFailures(t *testing.T) {
 		fake := &fakeUpdate{releaseBuild: true, latest: newerRelease()}
 		installFakeUpdate(t, fake)
 		code, _, stderr := runCommand(t, "", "update", "--apply")
-		if code != 1 || !strings.Contains(stderr, "macOS arm64") || fake.appliedTag != "" {
+		if code != 1 || stderr != messages.T(testLanguage, idUnsupported)+"\n" || fake.appliedTag != "" {
 			t.Fatalf("code=%d stderr=%q applied=%q", code, stderr, fake.appliedTag)
 		}
 	})

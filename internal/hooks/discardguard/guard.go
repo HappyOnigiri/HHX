@@ -95,11 +95,11 @@ func run(c *hookrt.Context) error {
 	if command == "" || !gitCallRE.MatchString(command) {
 		return nil
 	}
-	labels := discardLabels(command)
-	if len(labels) == 0 {
+	rules := discardRuleIDs(command)
+	if len(rules) == 0 {
 		return nil
 	}
-	label := strings.Join(labels, " / ")
+	label := ruleLabels(c.Language(), rules)
 
 	targets, err := resolveTargetDirs(command, cwd)
 	if err != nil {
@@ -107,7 +107,7 @@ func run(c *hookrt.Context) error {
 		return err
 	}
 	if targets == nil {
-		c.Deny(denyUnresolved(label))
+		c.Deny(denyUnresolved(c.Language(), label))
 		return nil
 	}
 	// 候補が同じ作業ツリーの別のディレクトリなら、保存は 1 回にする（toplevel で重複を除く）。
@@ -116,15 +116,15 @@ func run(c *hookrt.Context) error {
 	for _, target := range targets {
 		top, ok := runner.git(target, nil, "rev-parse", "--show-toplevel")
 		if !ok || top == "" {
-			c.Deny(denyFailed(label))
+			c.Deny(denyFailed(c.Language(), label))
 			return nil
 		}
 		if seen[top] {
 			continue
 		}
 		seen[top] = true
-		if snapshot(runner, top, label) == failed {
-			c.Deny(denyFailed(label))
+		if snapshot(runner, top, strings.Join(rules, " / ")) == failed {
+			c.Deny(denyFailed(c.Language(), label))
 			return nil
 		}
 	}
@@ -220,7 +220,8 @@ func isDiscardingApply(command string) bool {
 
 // discardRule は未コミットの変更を破棄する操作の 1 つである。
 type discardRule struct {
-	label   string
+	// id はルールの識別子である。snapshot のメッセージに残るので、表示言語に依存させない。理由文のラベルはカタログから引く。
+	id      string
 	matches func(string) bool
 }
 
@@ -228,29 +229,39 @@ func pattern(expression string) func(string) bool {
 	return regexp.MustCompile(expression).MatchString
 }
 
+// ルールの ID。snapshot のメッセージに残る永続データなので変えない。
+const (
+	ruleResetHard = "git-reset-hard"
+	ruleCheckout  = "git-checkout"
+	ruleSwitch    = "git-switch"
+	ruleRestore   = "git-restore"
+	ruleClean     = "git-clean"
+	ruleApply     = "git-apply"
+)
+
 // discardRules は snapshot の対象になる操作である。ラベルはこの順に " / " で連結して理由文に入れる。
 var discardRules = []discardRule{
-	{"git reset --hard", pattern(gitCommand + `reset` + segment + py.Space + `--hard` + end)},
+	{ruleResetHard, pattern(gitCommand + `reset` + segment + py.Space + `--hard` + end)},
 	// -B（ブランチの付け替え）と、パススペック・強制形（checkout . / -- <path> / -f）。
-	{"git checkout (破棄形)", pattern(gitCommand + `checkout` + segment + py.Space + `(?:-B|--|\.|:/|-f|--force)` + end)},
-	{"git switch (強制切り替え)", pattern(gitCommand + `switch` + segment + py.Space +
+	{ruleCheckout, pattern(gitCommand + `checkout` + segment + py.Space + `(?:-B|--|\.|:/|-f|--force)` + end)},
+	{ruleSwitch, pattern(gitCommand + `switch` + segment + py.Space +
 		`(?:-f|--force|--discard-changes|-C)` + end)},
-	{"git restore (作業ツリー)", isWorktreeRestore},
+	{ruleRestore, isWorktreeRestore},
 	// 短縮フラグは連結（-fd / -xdf / -ffd）を許すため、末尾の境界を要求しない。
-	{"git clean -f", pattern(gitCommand + `clean` + segment + py.Space + `(?:-[a-zA-Z]*f|--force` + end + `)`)},
-	{"git apply (破棄形)", isDiscardingApply},
+	{ruleClean, pattern(gitCommand + `clean` + segment + py.Space + `(?:-[a-zA-Z]*f|--force` + end + `)`)},
+	{ruleApply, isDiscardingApply},
 }
 
 // discardSubcommands は discardRules で拾うサブコマンドである。必ず一致させる（テストで縛っている）。
 // 漏らすと、対象の特定が git -C <別のリポジトリ> を採用せず cwd を保存し、本来の対象が無防備になる。
 var discardSubcommands = []string{"reset", "checkout", "switch", "restore", "clean", "apply"}
 
-// discardLabels は command に当たったルールのラベルを、discardRules の順に返す。
-func discardLabels(command string) []string {
+// discardRuleIDs は command に当たったルールの ID を、discardRules の順に返す。
+func discardRuleIDs(command string) []string {
 	var labels []string
 	for _, rule := range discardRules {
 		if rule.matches(command) {
-			labels = append(labels, rule.label)
+			labels = append(labels, rule.id)
 		}
 	}
 	return labels
@@ -515,8 +526,8 @@ const (
 )
 
 // snapshot は作業ツリー top の未コミットの変更を snapshot のコミットにして snapshotRef に積む。
-// top は rev-parse --show-toplevel の値である。
-func snapshot(runner gitRunner, top, label string) snapshotResult {
+// top は rev-parse --show-toplevel の値で、rules は発火したルールの ID を " / " で連結したものである。
+func snapshot(runner gitRunner, top, rules string) snapshotResult {
 	gitDir, ok := runner.git(top, nil, "rev-parse", "--absolute-git-dir")
 	if !ok || gitDir == "" {
 		return failed
@@ -547,7 +558,8 @@ func snapshot(runner gitRunner, top, label string) snapshotResult {
 
 	head, _ := runner.git(top, nil, "rev-parse", "--verify", "-q", "HEAD")
 	// ref は作業ツリーの間で共有されるので、どの作業ツリーのものかをメッセージに残す。
-	message := "wt-snapshot: " + label + " @ " + top
+	// 発火したルールは表示言語に依存しない ID で書く（後から別の言語の環境で reflog を読むことがある）。
+	message := "wt-snapshot: " + rules + " @ " + top
 
 	args := []string{"commit-tree"}
 	if head != "" {

@@ -22,7 +22,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -106,39 +105,40 @@ func (r rule) context() string {
 }
 
 func run(c *hookrt.Context) error {
-	event, rules, warnings := handle(c.Input)
+	t := texts{language: c.Language()}
+	event, rules, warnings := handle(c.Input, t)
 	contexts := make([]string, len(rules))
 	for index, rule := range rules {
 		contexts[index] = rule.context()
 	}
-	c.Notify(event, strings.Join(contexts, "\n\n"), warningText(warnings))
+	c.Notify(event, strings.Join(contexts, "\n\n"), warningText(t, warnings))
 	return nil
 }
 
 // handle は payload を読んでイベントごとに処理し、出力のイベント名・注入するルール・警告を返す。
-func handle(input []byte) (string, []rule, []string) {
+func handle(input []byte, t texts) (string, []rule, []string) {
 	if !utf8.Valid(input) {
-		return "PreToolUse", nil, []string{fmt.Sprintf(warningInvalidInput, "stdin is not valid UTF-8")}
+		return "PreToolUse", nil, []string{t.warn(idInvalidInput, map[string]any{"Error": "stdin is not valid UTF-8"})}
 	}
 	value, err := decodeJSON(string(input))
 	if err != nil {
-		return "PreToolUse", nil, []string{fmt.Sprintf(warningInvalidInput, err)}
+		return "PreToolUse", nil, []string{t.warn(idInvalidInput, map[string]any{"Error": err.Error()})}
 	}
 	payload, ok := value.(map[string]any)
 	if !ok {
-		return "PreToolUse", nil, []string{warningNotObject}
+		return "PreToolUse", nil, []string{t.warn(idNotObject, nil)}
 	}
 	event, _ := payload["hook_event_name"].(string)
 	if event == "" {
 		event = "PreToolUse"
 	}
 	sessionID, _ := payload["session_id"].(string)
-	state := newStateStore()
+	state := newStateStore(t)
 	resolver := &gitRoots{cache: map[string]gitRootResult{}}
 	claim := func() (string, []rule, []string) {
-		rules, warnings, err := applicableRules(payload, resolver)
+		rules, warnings, err := applicableRules(payload, resolver, t)
 		if err != nil {
-			return "PreToolUse", nil, []string{unexpected(err)}
+			return "PreToolUse", nil, []string{t.warn(idUnexpected, map[string]any{"Kind": "OSError", "Error": err.Error()})}
 		}
 		claimed, claimWarnings := state.claim(sessionID, rules)
 		return event, claimed, append(warnings, claimWarnings...)
@@ -159,10 +159,6 @@ func handle(input []byte) (string, []rule, []string) {
 	return event, nil, nil
 }
 
-func unexpected(err error) string {
-	return fmt.Sprintf(warningUnexpected, "OSError", err)
-}
-
 // decodeJSON は text 全体を 1 つの JSON の値として読む。数値は json.Number のまま持つ。
 func decodeJSON(text string) (any, error) {
 	decoder := json.NewDecoder(strings.NewReader(text))
@@ -179,7 +175,7 @@ func decodeJSON(text string) (any, error) {
 }
 
 // warningText は警告を 1 行にまとめる。最大 3 件を出し、残りは件数だけ書く。
-func warningText(warnings []string) string {
+func warningText(t texts, warnings []string) string {
 	var messages []string
 	for _, warning := range warnings {
 		if py.Strip(warning) != "" {
@@ -191,13 +187,13 @@ func warningText(warnings []string) string {
 	}
 	shown := messages[:min(len(messages), 3)]
 	if len(messages) > len(shown) {
-		shown = append(shown, fmt.Sprintf(warningMore, len(messages)-len(shown)))
+		shown = append(shown, t.warn(idMore, map[string]any{"Count": len(messages) - len(shown)}))
 	}
 	return warningPrefix + strings.Join(shown, "; ")
 }
 
 // fitContext は上限に収まる順にルールを選ぶ。収まらないものは警告に回す。区切りの空行は 2 バイトに数える。
-func fitContext(rules []rule) ([]rule, []string) {
+func fitContext(rules []rule, t texts) ([]rule, []string) {
 	var selected []rule
 	var warnings []string
 	used := 0
@@ -208,7 +204,7 @@ func fitContext(rules []rule) ([]rule, []string) {
 			separator = 2
 		}
 		if used+separator+size > maxContextBytes {
-			warnings = append(warnings, fmt.Sprintf(warningContextLimit, maxContextBytes, rule.path))
+			warnings = append(warnings, t.warn(idContextLimit, map[string]any{"Limit": maxContextBytes, "Path": rule.path}))
 			continue
 		}
 		selected = append(selected, rule)
@@ -226,10 +222,10 @@ type pathValue struct {
 }
 
 // targetPaths は payload から対象のパスを集める。
-func targetPaths(payload map[string]any) ([]string, []string, error) {
+func targetPaths(payload map[string]any, t texts) ([]string, []string, error) {
 	cwdValue, ok := payload["cwd"].(string)
 	if !ok || cwdValue == "" {
-		return nil, []string{warningNoCwd}, nil
+		return nil, []string{t.warn(idNoCwd, nil)}, nil
 	}
 	cwd, err := py.Abspath(py.Expanduser(cwdValue))
 	if err != nil {
@@ -471,8 +467,8 @@ func partCount(path string) int {
 }
 
 // applicableRules は payload の対象に適用されるルールを、浅い順（同じ深さはバイト列の順）に読む。
-func applicableRules(payload map[string]any, roots *gitRoots) ([]rule, []string, error) {
-	targets, warnings, err := targetPaths(payload)
+func applicableRules(payload map[string]any, roots *gitRoots, t texts) ([]rule, []string, error) {
+	targets, warnings, err := targetPaths(payload, t)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -498,7 +494,7 @@ func applicableRules(payload map[string]any, roots *gitRoots) ([]rule, []string,
 	})
 	var rules []rule
 	for _, path := range ordered {
-		rule, found, warning := readRule(path)
+		rule, found, warning := readRule(path, t)
 		switch {
 		case warning != "":
 			warnings = append(warnings, warning)
@@ -510,17 +506,17 @@ func applicableRules(payload map[string]any, roots *gitRoots) ([]rule, []string,
 }
 
 // readRule は path のルールを読む。通常のファイルでなければ found は偽になり、読めなければ警告を返す。
-func readRule(path string) (rule, bool, string) {
+func readRule(path string, t texts) (rule, bool, string) {
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		return rule{}, false, ""
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return rule{}, false, fmt.Sprintf(warningReadRule, path, err)
+		return rule{}, false, t.warn(idReadRule, map[string]any{"Path": path, "Error": err.Error()})
 	}
 	if !utf8.Valid(data) {
-		return rule{}, false, fmt.Sprintf(warningReadRule, path, "UTF-8 として読めない")
+		return rule{}, false, t.warn(idReadRuleNotUTF8, map[string]any{"Path": path})
 	}
 	sum := sha256.Sum256(data)
 	return rule{path: path, scope: parent(path), digest: hex.EncodeToString(sum[:]), text: string(data)}, true, ""
@@ -530,8 +526,9 @@ func readRule(path string) (rule, bool, string) {
 
 // stateStore はセッションごとの注入済みの記録である。
 type stateStore struct {
-	dir string
-	err error
+	dir   string
+	err   error
+	texts texts
 }
 
 type stateFile struct {
@@ -543,9 +540,9 @@ type stateEntry struct {
 	LoadedAt int64  `json:"loaded_at"`
 }
 
-func newStateStore() *stateStore {
+func newStateStore(t texts) *stateStore {
 	dir, err := hookcache.Dir(Name)
-	return &stateStore{dir: dir, err: err}
+	return &stateStore{dir: dir, err: err, texts: t}
 }
 
 // fileName はセッションの記録のファイル名である。安全な文字に絞った session_id に、元の値のハッシュを足して衝突させない。
@@ -626,8 +623,8 @@ func (s *stateStore) claim(sessionID string, rules []rule) ([]rule, []string) {
 		return nil, nil
 	}
 	if sessionID == "" {
-		selected, warnings := fitContext(rules)
-		return selected, append(warnings, warningNoSessionClaim)
+		selected, warnings := fitContext(rules, s.texts)
+		return selected, append(warnings, s.texts.warn(idNoSessionClaim, nil))
 	}
 	var claimed []rule
 	var warnings []string
@@ -651,7 +648,7 @@ func (s *stateStore) claim(sessionID string, rules []rule) ([]rule, []string) {
 			}
 			pending = append(pending, rule)
 		}
-		claimed, warnings = fitContext(pending)
+		claimed, warnings = fitContext(pending, s.texts)
 		for _, rule := range claimed {
 			state.Rules[rule.path] = stateEntry{Digest: rule.digest, LoadedAt: now}
 		}
@@ -661,8 +658,8 @@ func (s *stateStore) claim(sessionID string, rules []rule) ([]rule, []string) {
 		return s.save(sessionID, state)
 	})
 	if err != nil {
-		selected, warnings := fitContext(rules)
-		return selected, append(warnings, fmt.Sprintf(warningStateClaim, err))
+		selected, warnings := fitContext(rules, s.texts)
+		return selected, append(warnings, s.texts.warn(idStateClaim, map[string]any{"Error": err.Error()}))
 	}
 	return claimed, warnings
 }
@@ -670,7 +667,7 @@ func (s *stateStore) claim(sessionID string, rules []rule) ([]rule, []string) {
 // restored は記録済みのルールを読み直す。
 func (s *stateStore) restored(sessionID string) ([]rule, []string) {
 	if sessionID == "" {
-		return nil, []string{warningNoSessionStored}
+		return nil, []string{s.texts.warn(idNoSessionStored, nil)}
 	}
 	var paths []string
 	err := s.ready()
@@ -683,13 +680,13 @@ func (s *stateStore) restored(sessionID string) ([]rule, []string) {
 		}
 	}
 	if err != nil {
-		return nil, []string{fmt.Sprintf(warningStateStored, err)}
+		return nil, []string{s.texts.warn(idStateStored, map[string]any{"Error": err.Error()})}
 	}
 	sort.Strings(paths)
 	var rules []rule
 	var warnings []string
 	for _, path := range paths {
-		rule, found, warning := readRule(path)
+		rule, found, warning := readRule(path, s.texts)
 		switch {
 		case warning != "":
 			warnings = append(warnings, warning)
@@ -697,7 +694,7 @@ func (s *stateStore) restored(sessionID string) ([]rule, []string) {
 			rules = append(rules, rule)
 		}
 	}
-	rules, limitWarnings := fitContext(rules)
+	rules, limitWarnings := fitContext(rules, s.texts)
 	return rules, append(warnings, limitWarnings...)
 }
 
@@ -715,7 +712,7 @@ func (s *stateStore) replace(sessionID string, rules []rule) []string {
 		return s.save(sessionID, state)
 	})
 	if err != nil {
-		return []string{fmt.Sprintf(warningStateReplace, err)}
+		return []string{s.texts.warn(idStateReplace, map[string]any{"Error": err.Error()})}
 	}
 	return nil
 }

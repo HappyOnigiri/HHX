@@ -22,7 +22,6 @@ package pushcicontext
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"regexp"
 	"strings"
@@ -31,6 +30,7 @@ import (
 
 	"github.com/HappyOnigiri/hhx/internal/hookexec"
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 	py "github.com/HappyOnigiri/hhx/internal/pycompat"
 	"github.com/HappyOnigiri/hhx/internal/toolresponse"
 )
@@ -93,7 +93,7 @@ func run(c *hookrt.Context) error {
 	if err != nil || input == nil {
 		return err
 	}
-	if _, ok := eventContext[input.event]; !ok {
+	if input.event != "PostToolUse" && input.event != "PreToolUse" {
 		return nil
 	}
 	trigger := triggerKind(input.command)
@@ -113,23 +113,37 @@ func run(c *hookrt.Context) error {
 			return nil
 		}
 	}
+	c.AddContext(input.event, guidanceText(c.Language(), input, trigger))
+	return nil
+}
+
+// guidanceText は注入する案内を組み立てる。書き出し・待ち方の方針・CLI ごとの待ち方の順に並べる。
+func guidanceText(language i18n.Language, input *invocation, trigger kind) string {
+	post := input.event == "PostToolUse"
+	order := messages.T(language, idOrder)
 	var context, label, command, body string
 	if trigger == workflowDispatch {
-		body, label, command = dispatchGuidance, dispatchLabel, workflowWatchCommand(input.command, input.response)
-		context = dispatchBefore
-		if input.event == "PostToolUse" {
-			context = dispatchSucceeded
+		command = workflowWatchCommand(language, input.command, input.response)
+		body = messages.Text(language, idDispatchGuidance, map[string]any{"Order": order})
+		label = messages.T(language, idLabelDispatch)
+		context = messages.T(language, idPreDispatch)
+		if post {
+			context = messages.T(language, idPostDispatch)
 		}
 	} else {
-		body, label, command = guidance, waitLabel, waitCommand
-		context = eventContext[input.event]
+		command = waitCommand
+		body = messages.Text(language, idGuidance, map[string]any{"Command": waitCommand, "Order": order})
+		label = messages.T(language, idLabelWaitCI)
+		context = messages.T(language, idPrePush)
+		if post {
+			context = messages.T(language, idPostPush)
+		}
 	}
-	wait := fmt.Sprintf(bashGuidance, command)
+	wait := messages.Text(language, idBash, map[string]any{"Command": command})
 	if input.codex {
-		wait = fmt.Sprintf(codexGuidance, label, py.QuoteJSON(command))
+		wait = messages.Text(language, idCodex, map[string]any{"Label": label, "Command": py.QuoteJSON(command)})
 	}
-	c.AddContext(input.event, context+body+wait)
-	return nil
+	return context + body + wait
 }
 
 // read は判定の材料を読む。nil を返したら無出力で終える。
@@ -400,7 +414,7 @@ func workflowRunID(response any) (string, bool) {
 }
 
 // workflowWatchCommand は、dispatch した run を同じプロセスの中で登録待ちしてから watch するコマンドを返す。
-func workflowWatchCommand(command string, response any) string {
+func workflowWatchCommand(language i18n.Language, command string, response any) string {
 	tokens := workflowTokens(command)
 	repoArgs := ""
 	if repository, ok := optionValue(tokens, "-R", "--repo"); ok && repository != "" {
@@ -425,12 +439,12 @@ func workflowWatchCommand(command string, response any) string {
 		`while [ -z "$run_id" ]; do ` +
 		"run_ids=$(" + listCommand + "); list_rc=$?; " +
 		`[ "$list_rc" -eq 0 ] || exit "$list_rc"; set -- $run_ids; ` +
-		`if [ "$#" -gt 1 ]; then echo '` + multipleCandidates + `' >&2; exit 2; fi; ` +
+		`if [ "$#" -gt 1 ]; then echo '` + messages.T(language, idMultipleCandidates) + `' >&2; exit 2; fi; ` +
 		`if [ "$#" -eq 1 ]; then if [ "$candidate" = "$1" ]; then stable=$((stable + 1)); ` +
 		"else candidate=$1; stable=1; fi; else candidate=''; stable=0; fi; " +
 		`if [ "$stable" -ge 2 ]; then run_id=$candidate; break; fi; ` +
 		`attempts=$((attempts + 1)); if [ "$attempts" -ge 180 ]; then ` +
-		`echo '` + registrationTimeout + `' >&2; exit 124; fi; sleep 30; done; ` +
+		`echo '` + messages.T(language, idRegistrationTimeout) + `' >&2; exit 124; fi; sleep 30; done; ` +
 		`gh run watch "$run_id" --exit-status` + repoArgs
 }
 

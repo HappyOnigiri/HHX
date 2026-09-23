@@ -1,5 +1,7 @@
 # hhx
 
+English | [日本語](README.ja.md)
+
 `hhx` is a single Go binary that provides agent hooks for Claude Code and Codex.
 Each hook is registered as its own entry, `hhx hook <name>`, so a slow hook never delays the others.
 
@@ -45,13 +47,19 @@ Configuration and caches are kept; the script prints their locations.
 
 ## Configuration
 
-`~/.config/hhx/config.yaml` (override with `HHX_CONFIG`) turns hooks on or off and holds hook-specific settings:
+`~/.config/hhx/config.yaml` (override with `HHX_CONFIG`) chooses the display language, turns hooks on or off, and holds hook-specific settings:
 
 ```yaml
+language: ja   # en (default) or ja
 hooks:
   some-hook:
     enabled: false
 ```
+
+`language` selects the language of everything hhx writes: denial reasons, the context it injects, and the output of the `hhx` commands.
+Without it, or with any value other than `en` or `ja`, hhx uses English; `hhx install` reports an invalid value.
+Machine-readable parts stay the same in every language: JSON keys, the tags and field names of injected context,
+and the `wait-ci:` prefix, the last line, and the exit codes of `hhx wait-ci`.
 
 Every known hook is registered by `hhx install`; whether it runs is decided from this file at run time, so changing the file never requires reinstalling.
 A missing or broken file never stops a hook: hooks fall back to their defaults.
@@ -79,8 +87,6 @@ The context hooks add text to the agent's context and never deny anything:
 | `pr-body-staleness` | on | `PostToolUse` (Bash) | After a successful `git push`: the commits made after the pull request body was last edited, so the agent checks whether the body is out of date |
 | `agents-local-context` | on (Codex only) | `PreToolUse`, `SessionStart`, `SubagentStart` | The `AGENTS.local.md` files that apply to the paths a tool touches, from the Git root down, once per session. It re-injects them after compaction and for subagents |
 
-Messages shown to the agent are currently in Japanese.
-
 `git-hookspath-guard` is meant for setups that delegate from global Git hooks to repository hooks. Turn it on with:
 
 ```yaml
@@ -90,12 +96,13 @@ hooks:
 ```
 
 `pr-body-staleness` tells the agent to update the body with the `update-pr` skill.
-Replace that sentence with your own way of updating a pull request body (a closing `。` is added when it has no sentence-ending mark):
+Replace that sentence with your own way of updating a pull request body.
+hhx uses it as written in every language, adding a closing `.` (or `。` with `language: ja`) when it has no sentence-ending mark:
 
 ```yaml
 hooks:
   pr-body-staleness:
-    update-instruction: "食い違いがあれば `gh pr edit --body-file` で本文を更新する。"
+    update-instruction: "If they disagree, update the body with `gh pr edit --body-file`."
 ```
 
 `pr-context` and `pr-body-staleness` call `gh` (it must be on `PATH` and signed in) and give up silently when it fails or takes more than 8 seconds.
@@ -122,7 +129,8 @@ because it counts parentheses without telling quoted ones or `case` patterns apa
 Several `-C` in one `git` call apply in order, as in Git.
 
 The ref lives in the common Git directory, so all worktrees of a repository share it.
-Each entry's message ends with `@ <worktree>`, the top-level directory of the worktree it came from. To restore:
+Each entry's message is `wt-snapshot: <rules> @ <worktree>`: the rules that fired (such as `git-reset-hard / git-clean`,
+the same in every language) and the top-level directory of the worktree it came from. To restore:
 
 ```sh
 # 1. Find the entry of your worktree

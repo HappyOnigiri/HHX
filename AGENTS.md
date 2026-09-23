@@ -31,10 +31,11 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `internal/hookexec`: hook から git・gh を時間の上限付きで起動する。gh は PATH から探すので、テストでは偽の gh で差し替えられる
 - `internal/hookcache`: 失っても害のない hook の状態（取得のキャッシュ・注入済みの記録）の置き場（`$XDG_CACHE_HOME/hhx/<hook>`）
 - `internal/toolresponse`: PostToolUse の実行結果（tool_response）の成功の判定。push-ci-context と pr-body-staleness が共有する
-- `internal/hooktest`: hook のテストの補助（テストからだけ使う）。偽の gh（`compat/fake_gh.py` と同じ規約）と、
+- `internal/hooktest`: hook のテストの補助（テストからだけ使う）。偽の gh と、
   HOME・作業ディレクトリ・git の設定を隔離する `Main` を持つ
 - `internal/install`: Claude の settings.json と Codex の hooks.json の読み書き
-- `internal/config`: `~/.config/hhx/config.yaml` の読み込み
+- `internal/config`: `~/.config/hhx/config.yaml` の読み込み（表示言語 `language` を含む）
+- `internal/i18n`: 表示言語（`en` / `ja`、既定は英語）と、ID ごとに英語と日本語を持つカタログ。各パッケージの `messages.go` が自分の表を `Register` する
 - `internal/update`: GitHub Releases の確認と、Release 添付の `install.sh` による更新（`hhx update`）
 - `internal/waitci`: `hhx wait-ci`（PR の CI の完了を 1 回だけ報告する）の判定の本体。引数の解析と出力は `cmd/hhx/waitci.go` が持つ。
   hook ではないので hook の実行時の保護（fail-open）を通さない。1 行目の結論・最終行の `wait-ci: exit=...`・終了コードは読み手との契約なので変えない。
@@ -42,12 +43,10 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `.github/workflows/`: CI とリリース（[docs/release.md](docs/release.md)）、flaky なテストの起票（`report-flaky-tests.yml`）
 - `.github/scripts/`: flaky なテストの issue を起票する reporter（`actions/github-script` から呼ぶ）
 - `tools/`: 開発用の補助ツール。`tools/citest` は CI のテストで落ちたテストだけを 1 回再実行し、報告を artifact に残す
-- `compat/`: 移行期間だけ置く Python の互換スイート（[compat/README.md](compat/README.md)）
 
 ## 開発
 
-- CI と同じ検査は `make ci`（lint・race とカバレッジのテスト・配布物・インストーラーの検査を並列に走らせる）。
-  互換スイートは Python 実装を参照するので CI では流さず、`make check`（`make ci` と `make compat-test`）で手元でだけ流す。
+- CI と同じ検査は `make ci`（lint・race とカバレッジのテスト・日本語の表示でのテスト・配布物・インストーラーの検査を並列に走らせる）。
 - CI のジョブは Makefile のターゲットを 1 つずつ走らせる。検査を足すときは Makefile に書き、`ci-checks` と `ci.yml` の matrix の両方へ足す。
 - CI のテストは citest 経由で走り、落ちたテストを 1 回だけ再実行する。再実行で通ったテストは CI を落とさず、
   CI の完了後に `report-flaky-tests.yml` がテストごとに issue を起票する。再実行でも落ちれば CI は失敗する。
@@ -59,6 +58,17 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
   API を Go から直接呼ばない（認証を gh に任せ、テストで偽の gh に差し替えるため）。
 - install のテストは一時的な HOME で行い、実機の設定ファイルに触れない。
 - コメントは日本語で書き、保守に必要な意図・制約・契約だけを残す。
+- 出力する文面（deny の理由文・注入するコンテキスト・CLI の出力）は、各パッケージの `messages.go` のカタログに英語と日本語で置く。
+  - Go のソースの文字列リテラルに日本語を書くのは `messages.go` とテストだけにする（`cmd/hhx/catalog_test.go` が検査する）。
+  - ID にはパッケージの利用者名（hook 名・`wait-ci`・`cli`）を前置きし、各 ID に文の意図（何を止め、何を促すか）を 1 行のコメントで書く。
+  - 差し込みは `{{.Name}}` だけにし、英語と日本語で同じ名前の集合を使う（`i18n.Validate` が検査する）。
+  - 翻訳しないもの: JSON のキー、注入のタグと項目名、`wait-ci:` の接頭辞・最終行・check の結果の語、利用者が設定で書いた文、
+    discard-guard の snapshot のメッセージ（永続データなので規則の ID で書く）。
+  - エージェント向けの英訳は、直訳ではなく同じ指示が伝わることを基準にする。「❌ Blocked:」「Reason:」「Action:」の段の数と順序を保ち、
+    禁止と代替は命令文で書く（should / consider に弱めない）。コマンド・フラグ・パスは訳さない。
+  - 表示言語は、hook では一次ゲートより後に `hookrt.Context.Language` で、CLI では設定から 1 回だけ決める。
+    エラーの `Error()` は英語のままにし、表示するときに CLI がカタログの文面を選ぶ。
+  - 日英対訳の一覧は `HHX_CATALOG_DUMP=<path> go test ./cmd/hhx -run TestDumpCatalogForReview` で書き出せる（見直し用。リポジトリには置かない）。
 
 ## hook の移植の型
 
@@ -67,14 +77,15 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
 - パッケージは `internal/hooks/<hook 名からハイフンを除いたもの>`。中身は次の 3 つにする。
   - `guard.go`: `Definition()`（名前・既定の有効・登録先・一次ゲート・`Run`）と判定のロジック。
     登録先は移植元の Claude の settings と Codex の hooks.json の matcher をそのまま写す。
-  - `messages.go`: 理由文。回避を思いとどまらせるのは理由文だけなので、迂回せず報告するよう文面で促す。
+  - `messages.go`: 理由文のカタログ（ID と英語・日本語の文面）。回避を思いとどまらせるのは理由文だけなので、迂回せず報告するよう文面で促す。
     Claude Code と Codex の両方に出るので、片方にしか無いツール名を書かない。注入系の hook では、注入する文面と警告をここに置く。
+    判定の関数は発火した規則の ID を返し、文面は出力の直前にカタログから組み立てる。
   - `guard_test.go`
 - `internal/registry` の一覧へ、移植元の登録順の位置に足す。Makefile の `GO_COVERAGE_PACKAGES` にも足す。
 - 判定は Python の意味を 1 対 1 で移す。書き直して「より正しく」しない。気付いた穴は README の Limits に書くか、別の作業に回す。
   - 例外として、移植元のままではデータを失う穴（discard-guard が別のリポジトリを保存して通すなど）は、1 対 1 よりデータを守ることを優先して直す。
     hhx に切り替えた後は Python 実装は動かないので、移植元に合わせて残す理由が無い。
-    直した点はコードのコメントに移植元との違いとして書き、`compat/test_differential.py` では該当する入力を比較から外して、外す理由を書く。
+    直した点はコードのコメントに移植元との違いとして書き、Go のテストで直した後の挙動を固定する。
     今ある例は discard-guard の 2 点（`( ... )` の中の cd を閉じ括弧で取り消す、1 つの git の複数の `-C` を順に適用する）。
     前者は、閉じ括弧で取り消した cwd に加え、括弧を無視して辿った cwd も保存する（どちらかが解決できなければ deny）。
     括弧の数え方はクォートや `case` のパターンを区別しないので、取り消しが誤っていても実際の破棄先を落とさないためである。
@@ -92,20 +103,20 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
   - 理由文に入力を JSON 文字列として埋め込むときは `pycompat.QuoteJSON` を使う（`encoding/json` は `<>&` と U+2028 をエスケープする）。
   - `os.path` のパス処理は `pycompat` の `Normpath`・`Realpath`・`Relpath` などを使う。`filepath.Clean` は先頭の `//` を畳み、
     `filepath.EvalSymlinks` は存在しないパスでエラーになり、`os.Getwd` は PWD 環境変数を返すことがある。
-  - 先読み・後読みを手書きの走査に置き換えた hook は、`compat/test_differential.py` に足し、
-    Python 実装との差分テスト（既存の表と、それを変形した大量の入力）で不一致が無いことを確かめる。
+  - 先読み・後読みを手書きの走査に置き換えたときは、境界の断片（区切り文字・クォート・Unicode の空白や語の文字）を差し込んだケースを表に足す。
 - テストは Go に移す。
   - 移植元の Python テストのケースは L2 も含めてすべて表の行として移す。L1 相当は `hooktest` で実運用と同じ経路（stdin の payload、argv）から起動し、判定と発火したルールのラベルを見る。
   - 奇妙な入力（空、`null`、`[]`、型の違う `command`・`tool_input`）、末尾の改行、設定で無効にしたときの無出力を足す。
+  - 理由文や注入の中身は、期待する文字列を直書きせず、`hooktest.Language` の言語でカタログから引いて確かめる。
+    `make test-ja`（CI の `test-ja` ジョブ）は同じテストを `HHX_TEST_LANGUAGE=ja` で流し、日本語の文面でも通ることを確かめる。
+  - Codex の `additionalContextLimit` を持つ注入は、両言語の最長の文面が上限に収まることをテストする（英語は長くなりやすい）。
   - テストには実際の禁止語や個人のパスを書かず、架空の値（`acme-internal`、`/Users/alice`）を使う。
   - cwd が空のときやデバッグ経路でプロセスの作業ディレクトリを使う hook のテストは、`TestMain` で git 管理下でない一時ディレクトリへ移る
     （discard-guard はそこに snapshot を作ろうとするので、パッケージのディレクトリのままだと開発中のリポジトリに ref を作る）。
 - 注入系の hook（判断を返さずコンテキストを足すもの）は `hookrt.Context` の `AddContext`・`Print`・`Notify` で出力する。
   - Go のテストは `hooktest.Output` で stdout を受け、`hooktest.ParseInjection` で判断のフィールドが無いことまで確かめる。
   - gh を呼ぶ hook のテストは `TestMain` で `hooktest.Main` を呼び、`hooktest.NewFakeGH` で偽の gh を PATH の先頭に置く。
-    偽の gh の実体はテストのバイナリで、フィクスチャと呼び出しの記録は `compat/fake_gh.py` と同じ名前と形にする。
+    偽の gh の実体はテストのバイナリで、フィクスチャと呼び出しの記録の形は `internal/hooktest/fakegh.go` の規約に従う。
   - 状態は `internal/hookcache` の下に hook ごとのディレクトリを作って置く（0700 と 0600）。複数のプロセスが同じ記録を読み書きするなら、
     ロック用のファイルへの flock で排他する（agents-local-context）。
   - Python の `str()` と真偽の意味が要る値（tool_response の出力など）は `toolresponse.PyStr`・`toolresponse.Truthy` を使う。
-- 互換スイートでは、`compat/helpers.py` の `PORTED_HOOKS` に足し、`make compat-test` で L1 と argv の経路が全件通ることを確かめる。
-  既定で無効にした hook は `DEFAULT_OFF_HOOKS` にも足す（互換スイートは設定ファイルで有効にして流す）。

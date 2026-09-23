@@ -43,6 +43,8 @@ jobs:
           - target: test-race-coverage
             go: true
             citest-profile: race-coverage
+          - target: test-ja
+            go: true
           - target: release-check
             go: true
           # git describe がタグを読めるよう、このジョブだけ履歴とタグを取得する。

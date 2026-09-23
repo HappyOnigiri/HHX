@@ -67,7 +67,7 @@ func run(c *hookrt.Context) error {
 		return nil
 	}
 	if target := evaluate(command); target != "" {
-		c.Deny(reason(target))
+		c.Deny(reason(c.Language(), target))
 	}
 	return nil
 }
@@ -132,7 +132,7 @@ func normalize(command string) string {
 	return joinedXFlag.ReplaceAllString(normalized, "${1}-X ${2}")
 }
 
-// evaluate はコマンドを判定し、拒否するなら発火したルールの対象の表記を、通すなら空文字列を返す。
+// evaluate はコマンドを判定し、拒否するなら発火したルールの ID（対象の表記のカタログの ID）を、通すなら空文字列を返す。
 // ルールはこの順に見て、最初に一致したものを返す。
 func evaluate(command string) string {
 	if !secondGateRE.MatchString(command) {
@@ -141,15 +141,15 @@ func evaluate(command string) string {
 	normalized := normalize(command)
 	switch {
 	case prMergeRE.MatchString(normalized):
-		return targetPRMerge
+		return idTargetPRMerge
 	case apiMergeRE.MatchString(normalized):
-		return targetAPIMerge
+		return idTargetAPI
 	case graphQLRE.MatchString(normalized):
-		return targetGraphQL
+		return idTargetGraphQL
 	case httpHostRE.MatchString(normalized) && httpWrite.MatchString(normalized):
-		return targetHTTP
+		return idTargetHTTP
 	case fetchHeadRE.MatchString(normalized):
-		return targetFetch
+		return idTargetFetch
 	default:
 		return ""
 	}

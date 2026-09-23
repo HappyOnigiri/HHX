@@ -13,15 +13,26 @@ import (
 )
 
 // 理由文に出るラベル（どの分岐が発火したかの判別用）。
-const (
-	labelEmptyVar     = "空になりうる変数"
-	labelCmdsub       = "コマンド置換の中"
-	labelTooMany      = "コマンド置換が多すぎる"
-	labelUnresolvable = "静的に解決できない"
-	labelCritical     = "システム重要ディレクトリ"
-	labelCWD          = "作業ディレクトリ自身が削除対象"
-	labelAncestor     = "作業ディレクトリの親"
+var (
+	labelEmptyVar     = commandLabel(idEmptyVar)
+	labelCmdsub       = commandLabel(idCmdsub)
+	labelTooMany      = messages.T(hooktest.Language, idTooMany)
+	labelUnresolvable = messages.T(hooktest.Language, idUnresolvable)
+	labelCritical     = messages.T(hooktest.Language, idCritical)
+	labelCWD          = messages.T(hooktest.Language, idCWD)
+	labelAncestor     = messages.T(hooktest.Language, idAncestor)
 )
+
+// commandLabel は rm と rmdir のどちらでも一致するよう、対象の表記のうちコマンド名で区切った長い方を返す。
+func commandLabel(id string) string {
+	longest := ""
+	for _, part := range strings.Split(messages.Text(hooktest.Language, id, map[string]any{"Command": "\x00"}), "\x00") {
+		if part = strings.TrimSpace(part); len(part) > len(longest) {
+			longest = part
+		}
+	}
+	return longest
+}
 
 // fakeHome は架空のホームディレクトリである。実行者の HOME で判定が変わらないように固定する。
 const fakeHome = "/Users/alice"
@@ -120,7 +131,7 @@ func TestEmptyVariableOptionsAndRedirects(t *testing.T) {
 // `:?` の `?` が glob 文字として数えられるため、glob を続けると別分岐で止まる。
 func TestEmptyVariableReasonBoundsTheGuardedExpansion(t *testing.T) {
 	reason := reasonOf(t, `rm -rf "$BASE/$name"`, "/tmp")
-	for _, part := range []string{"${BASE:?}", "glob を続けると"} {
+	for _, part := range []string{"${BASE:?}", messages.Text(hooktest.Language, idHowEmptyVar, map[string]any{"NoAsk": messages.T(hooktest.Language, idNoAsk)})} {
 		if !strings.Contains(reason, part) {
 			t.Errorf("reason does not contain %q", part)
 		}
@@ -151,7 +162,7 @@ func TestSubstitutionWithTrailingGlobIsDenied(t *testing.T) {
 		`rm -rf "$(pwd)"/*`, "rm -rf $(git rev-parse --show-toplevel)/tmp/*", "rm -rf \"`pwd`\"/*",
 	))
 	reason := reasonOf(t, `rm -rf "$(pwd)"/*`, "/tmp")
-	if !strings.Contains(reason, "置換だけを単独で実行") {
+	if !strings.Contains(reason, messages.Text(hooktest.Language, idHowCmdsubGlob, map[string]any{"NoAsk": messages.T(hooktest.Language, idNoAsk)})) {
 		t.Errorf("reason must point at the substitution: %q", reason)
 	}
 	// 内部トークンは書いた覚えのない文字列なので、`$(…)` に戻して見せる。
@@ -185,7 +196,7 @@ func TestUnresolvableTargets(t *testing.T) {
 // A / B / D で理由と対処を分けること。
 func TestUnresolvableReasonIsSpecificPerBranch(t *testing.T) {
 	cdReason := reasonOf(t, "cd sub && rm -rf ./*", "/tmp")
-	if !strings.Contains(cdReason, "`cd` を外して") || !strings.Contains(cdReason, "rm -rf tmp/*") {
+	if !strings.Contains(cdReason, messages.Text(hooktest.Language, idHowCD, map[string]any{"NoAsk": messages.T(hooktest.Language, idNoAsk)})) || !strings.Contains(cdReason, "rm -rf tmp/*") {
 		t.Errorf("cd reason: %q", cdReason)
 	}
 	// 基準の作業ディレクトリが不定なのだから、解決後のパスを断定して見せない。
@@ -193,10 +204,10 @@ func TestUnresolvableReasonIsSpecificPerBranch(t *testing.T) {
 		t.Errorf("cd reason must not show a resolved path: %q", cdReason)
 	}
 	shapeReason := reasonOf(t, "rmdir -p build/*", "/tmp")
-	if !strings.Contains(shapeReason, "`-p`") || !strings.Contains(shapeReason, "親ディレクトリ") {
+	if !strings.Contains(shapeReason, "`-p`") || !strings.Contains(shapeReason, messages.Text(hooktest.Language, idHowShape, map[string]any{"NoAsk": messages.T(hooktest.Language, idNoAsk)})) {
 		t.Errorf("shape reason: %q", shapeReason)
 	}
-	if globReason := reasonOf(t, "rm -rf a/*/b/*", "/tmp"); !strings.Contains(globReason, "1 階層だけなら通る") {
+	if globReason := reasonOf(t, "rm -rf a/*/b/*", "/tmp"); !strings.Contains(globReason, messages.Text(hooktest.Language, idHowGlob, map[string]any{"NoAsk": messages.T(hooktest.Language, idNoAsk)})) {
 		t.Errorf("glob reason: %q", globReason)
 	}
 }
@@ -232,7 +243,7 @@ func TestCriticalPaths(t *testing.T) {
 // 止める前に「消さずに済ます」「範囲を狭める」を順に提示していること。
 func TestCriticalReasonOffersAlternativesBeforeStopping(t *testing.T) {
 	reason := reasonOf(t, "rm -rf /usr", "/tmp")
-	for _, part := range []string{"削除せずに済ませられないか", "範囲を狭められないか", "判断を仰ぐ", "echo", "`/usr/*`"} {
+	for _, part := range []string{messages.Text(hooktest.Language, idHowCritical, map[string]any{"NoAsk": messages.T(hooktest.Language, idNoAsk)}), "echo", "`/usr/*`"} {
 		if !strings.Contains(reason, part) {
 			t.Errorf("reason does not contain %q", part)
 		}
@@ -294,7 +305,7 @@ func TestWorkspaceReasons(t *testing.T) {
 		t.Fatal(err)
 	}
 	// cwd そのものは「実体パスで列挙して再実行してよい」側にする。
-	if reason := reasonOf(t, "rm -rf *", deep); !strings.Contains(reason, "実体パスで列挙") {
+	if reason := reasonOf(t, "rm -rf *", deep); !strings.Contains(reason, messages.Text(hooktest.Language, idHowCWDItself, map[string]any{"NoAsk": messages.T(hooktest.Language, idNoAsk)})) {
 		t.Errorf("cwd reason: %q", reason)
 	}
 	// cwd ごと消したい最頻ケースは worktree の後始末なので、専用コマンドを先に出す。
@@ -302,13 +313,12 @@ func TestWorkspaceReasons(t *testing.T) {
 		t.Errorf("cwd reason: %q", reason)
 	}
 	// `./*` は中身だけなので「作業ディレクトリごと消える」と断定しない。
-	if reason := reasonOf(t, "rm -rf ./*", deep); !strings.Contains(reason, "中身を指す形") ||
-		strings.Contains(reason, "ごと消す") {
+	if reason := reasonOf(t, "rm -rf ./*", deep); !strings.Contains(reason, messages.T(hooktest.Language, idWhyCWD)) {
 		t.Errorf("cwd reason: %q", reason)
 	}
 	// `..` は解決後のパスまで出し、cd で判定を外す形の禁止まで書いてある。
 	reason := reasonOf(t, "rm -rf ..", deep)
-	for _, part := range []string{filepath.Dir(deep), "worktree remove", "cd"} {
+	for _, part := range []string{filepath.Dir(deep), "worktree remove", "cd", messages.Text(hooktest.Language, idHowAncestor, map[string]any{"NoAsk": messages.T(hooktest.Language, idNoAsk)})} {
 		if !strings.Contains(reason, part) {
 			t.Errorf("ancestor reason does not contain %q: %q", part, reason)
 		}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	"github.com/HappyOnigiri/hhx/internal/config"
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
@@ -12,25 +13,13 @@ import (
 	"github.com/HappyOnigiri/hhx/internal/version"
 )
 
-const usage = `Usage:
-  hhx hook <name> [input]   Run a hook (invoked by Claude Code / Codex)
-  hhx install [--agent claude|codex]...
-                            Register hhx hooks in the agent settings
-  hhx uninstall [--agent claude|codex]...
-                            Remove hhx hooks from the agent settings
-  hhx wait-ci [reference] [options]
-                            Report the CI result of a pull request once every check has finished
-  hhx update [--apply]      Check GitHub Releases for a newer hhx (and install it)
-  hhx version               Print the version
-`
-
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprint(stderr, usage)
+		_, _ = fmt.Fprint(stderr, messages.T(displayLanguage(), idUsage))
 		return 2
 	}
 	switch args[0] {
@@ -48,10 +37,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stdout, "hhx version "+version.String())
 		return 0
 	case "-h", "--help", "help":
-		_, _ = fmt.Fprint(stdout, usage)
+		_, _ = fmt.Fprint(stdout, messages.T(displayLanguage(), idUsage))
 		return 0
 	default:
-		_, _ = fmt.Fprintf(stderr, "hhx: unknown command %q\n\n%s", args[0], usage)
+		language := displayLanguage()
+		unknown := messages.Text(language, idUnknownCommand, map[string]any{"Command": strconv.Quote(args[0])})
+		_, _ = fmt.Fprint(stderr, unknown+messages.T(language, idUsage))
 		return 2
 	}
 }
@@ -61,7 +52,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		// agent は必ず名前を付けて呼ぶ。名前が無いのは手で打った場合だけなので、使い方を示す。
-		_, _ = fmt.Fprint(stderr, usage)
+		_, _ = fmt.Fprint(stderr, messages.T(displayLanguage(), idUsage))
 		return 2
 	}
 	hookrt.Run(registry.Lookup(args[0]), hookrt.Invocation{

@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 	"github.com/HappyOnigiri/hhx/internal/pycompat"
 	"github.com/HappyOnigiri/hhx/internal/waitci"
 )
@@ -22,6 +23,8 @@ type waitCIAdapters struct {
 	clock    waitci.Clock
 	// watch は監視を実行する。テストは結果を差し替え、渡された設定を調べる。
 	watch func(*waitci.Waiter) waitci.Outcome
+	// language は結論と進捗の表示言語を返す。
+	language func() i18n.Language
 }
 
 func defaultWaitCIAdapters() waitCIAdapters {
@@ -30,6 +33,7 @@ func defaultWaitCIAdapters() waitCIAdapters {
 		runner:   waitci.ExecRunner{},
 		clock:    waitci.NewClock(),
 		watch:    (*waitci.Waiter).Run,
+		language: displayLanguage,
 	}
 }
 
@@ -75,39 +79,29 @@ func (p pythonInt) Set(text string) error {
 
 func pythonReprArg(text string) string { return "'" + text + "'" }
 
-func newWaitCIFlags(options *waitCIOptions) *pflag.FlagSet {
+func newWaitCIFlags(language i18n.Language, options *waitCIOptions) *pflag.FlagSet {
+	text := func(id string) string { return messages.T(language, id) }
 	flags := pflag.NewFlagSet("wait-ci", pflag.ContinueOnError)
 	// 使い方は自分で出す。pflag の既定はエラーのたびに stderr へ一覧を出し、--help でも stderr に出す。
 	flags.Usage = func() {}
 	flags.SetOutput(io.Discard)
 	flags.SortFlags = false
-	flags.StringVar(&options.sha, "sha", "",
-		"wait until this commit becomes the PR head (default: HEAD when no reference is given)")
-	flags.BoolVar(&options.anySHA, "any-sha", false, "watch the first head seen, whatever its commit")
+	flags.StringVar(&options.sha, "sha", "", text(idFlagSHA))
+	flags.BoolVar(&options.anySHA, "any-sha", false, text(idFlagAnySHA))
 	intFlag := func(target *int, name string, value int, usage string) {
 		*target = value
 		flags.Var(pythonInt{target}, name, usage)
 	}
-	intFlag(&options.interval, "interval", 20, "poll interval (seconds)")
-	intFlag(&options.timeout, "timeout", 1800, "overall limit (seconds)")
-	intFlag(&options.startTimeout, "start-timeout", 300, "limit for the head to match and checks to appear (seconds)")
-	intFlag(&options.settle, "settle", 30, "how long every check must stay complete (seconds)")
-	intFlag(&options.noCITimeout, "no-ci-timeout", 45,
-		"with no checks after this long, look for CI in the repository (seconds)")
-	intFlag(&options.prLookupTimeout, "pr-lookup-timeout", 60,
-		"limit for finding the PR of a detached HEAD commit (seconds)")
-	flags.BoolVarP(&options.progress, "progress", "v", false, "print progress on every poll to stderr")
-	flags.BoolVar(&options.allChecks, "all-checks", false, "list passing checks too (default: failures only)")
+	intFlag(&options.interval, "interval", 20, text(idFlagInterval))
+	intFlag(&options.timeout, "timeout", 1800, text(idFlagTimeout))
+	intFlag(&options.startTimeout, "start-timeout", 300, text(idFlagStart))
+	intFlag(&options.settle, "settle", 30, text(idFlagSettle))
+	intFlag(&options.noCITimeout, "no-ci-timeout", 45, text(idFlagNoCI))
+	intFlag(&options.prLookupTimeout, "pr-lookup-timeout", 60, text(idFlagPRLookup))
+	flags.BoolVarP(&options.progress, "progress", "v", false, text(idFlagProgress))
+	flags.BoolVar(&options.allChecks, "all-checks", false, text(idFlagAllChecks))
 	return flags
 }
-
-const waitCIUsageHeader = `Usage: hhx wait-ci [reference] [options]
-
-Report the CI result of a pull request once, after every check has finished.
-reference is a PR number, branch or URL (default: the current branch).
-
-Options:
-`
 
 // expandAbbreviations は、Python の argparse と同じく長いオプションの一意な前方一致を正式な名前へ展開する。
 // 曖昧な前方一致はエラーにする。`--` より後ろは位置引数なので触らない。
@@ -173,10 +167,13 @@ func checkSHAValue(args []string) error {
 }
 
 // parseWaitCIArgs は引数を読む。done が真なら code で終える（使い方を出した・引数が誤っている）。
-func parseWaitCIArgs(args []string, stdout, stderr io.Writer) (options waitCIOptions, code int, done bool) {
-	flags := newWaitCIFlags(&options)
+func parseWaitCIArgs(
+	language i18n.Language, args []string, stdout, stderr io.Writer,
+) (options waitCIOptions, code int, done bool) {
+	flags := newWaitCIFlags(language, &options)
+	usageHeader := messages.T(language, idWaitCIUsage)
 	fail := func(err error) (waitCIOptions, int, bool) {
-		_, _ = fmt.Fprintf(stderr, "%s%s\nhhx wait-ci: error: %v\n", waitCIUsageHeader, flags.FlagUsages(), err)
+		_, _ = fmt.Fprintf(stderr, "%s%s\nhhx wait-ci: error: %v\n", usageHeader, flags.FlagUsages(), err)
 		return options, 2, true
 	}
 	args, err := expandAbbreviations(flags, args)
@@ -188,7 +185,7 @@ func parseWaitCIArgs(args []string, stdout, stderr io.Writer) (options waitCIOpt
 	}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, pflag.ErrHelp) {
-			_, _ = fmt.Fprint(stdout, waitCIUsageHeader+flags.FlagUsages())
+			_, _ = fmt.Fprint(stdout, usageHeader+flags.FlagUsages())
 			return options, 0, true
 		}
 		return fail(err)
@@ -212,30 +209,33 @@ func parseWaitCIArgs(args []string, stdout, stderr io.Writer) (options waitCIOpt
 // 3 timeout、4 gh の失敗、5 コンフリクトで check が起動しない。
 // hook と違い終了コードが契約の一部なので、hook の実行時の保護（fail-open）は通さない。
 func runWaitCI(args []string, stdout, stderr io.Writer) int {
-	options, code, done := parseWaitCIArgs(args, stdout, stderr)
+	adapters := waitCICommand
+	language := adapters.language()
+	options, code, done := parseWaitCIArgs(language, args, stdout, stderr)
 	if done {
 		return code
 	}
-	adapters := waitCICommand
 	say := func(line string) { _, _ = fmt.Fprintln(stdout, line) }
+	// verdict は結論の行を出す。接頭辞 `wait-ci: ` は契約なので訳さない。
+	verdict := func(id string, data map[string]any) { say("wait-ci: " + messages.Text(language, id, data)) }
 	finish := func(code, failed, total int) int {
 		// パイプや background 実行で exit status が失われても、末尾の 1 行だけで判定できる。
 		say(fmt.Sprintf("wait-ci: exit=%d failed=%d total=%d", code, failed, total))
 		return code
 	}
 	if options.interval < 1 {
-		say("wait-ci: --interval は 1 以上")
+		verdict(idIntervalTooLow, nil)
 		return finish(2, 0, 0)
 	}
 	for _, tool := range []string{"gh", "git"} {
 		if _, err := adapters.lookPath(tool); err != nil {
-			say(fmt.Sprintf("wait-ci: %s が必要", tool))
+			verdict(idToolRequired, map[string]any{"Tool": tool})
 			return finish(4, 0, 0)
 		}
 	}
 
 	git := waitci.Git{Runner: adapters.runner}
-	gh := waitci.GH{Runner: adapters.runner}
+	gh := waitci.GH{Runner: adapters.runner, Language: language}
 	detached := waitci.IsDetached(options.reference, git.Output)
 	reference := options.reference
 	sha := options.sha
@@ -272,15 +272,15 @@ func runWaitCI(args []string, stdout, stderr io.Writer) int {
 		if lookupSHA == "" {
 			lookupSHA = headOrCurrent()
 		}
-		number, err := waitci.ResolvePR(lookupSHA, options.prLookupTimeout, options.interval, gh.FindPRBySHA,
+		number, err := waitci.ResolvePR(language, lookupSHA, options.prLookupTimeout, options.interval, gh.FindPRBySHA,
 			adapters.clock, progress)
 		var noPR *waitci.NoPullRequestError
 		switch {
 		case errors.As(err, &noPR):
-			say(fmt.Sprintf("wait-ci: %s。監視をスキップした", noPR.Message))
+			verdict(idSkippedNoPR, map[string]any{"Reason": noPR.Message})
 			return finish(0, 0, 0)
 		case err != nil:
-			say(fmt.Sprintf("wait-ci: detached HEAD の PR 解決に失敗した: %v", err))
+			verdict(idDetachedFailed, map[string]any{"Error": waitci.DisplayMessage(err)})
 			return finish(4, 0, 0)
 		}
 		reference = number
@@ -297,42 +297,44 @@ func runWaitCI(args []string, stdout, stderr io.Writer) int {
 		HasCI:        gh.CIEvidence,
 		Clock:        adapters.clock,
 		Progress:     progress,
+		Language:     language,
 	})
-	return reportWaitCI(outcome, detached, options.allChecks, say, finish)
+	return reportWaitCI(language, outcome, detached, options.allChecks, say, finish)
 }
 
 // reportWaitCI は監視の結果を結論・警告・明細の順に出し、終了コードを返す。
 func reportWaitCI(
-	outcome waitci.Outcome, detached, allChecks bool, say func(string), finish func(code, failed, total int) int,
+	language i18n.Language, outcome waitci.Outcome, detached, allChecks bool, say func(string),
+	finish func(code, failed, total int) int,
 ) int {
+	verdict := func(id string, data map[string]any) { say("wait-ci: " + messages.Text(language, id, data)) }
 	// check を 1 件も見ていない経路。結論はこの 1 行で言い切れる。
 	switch outcome.Status {
 	case waitci.StatusNoPR:
-		target := "branch"
+		target := idTargetBranch
 		if detached {
-			target = "commit"
+			target = idTargetCommit
 		}
-		say(fmt.Sprintf("wait-ci: この %s に PR が無いので監視をスキップした", target))
+		verdict(idNoPRFor, map[string]any{"Target": messages.T(language, target)})
 		return finish(0, 0, 0)
 	case waitci.StatusError:
-		say("wait-ci: gh の呼び出しが続けて失敗した: " + outcome.Message)
+		verdict(idGHKeptFailing, map[string]any{"Error": outcome.Message})
 		return finish(4, 0, 0)
 	case waitci.StatusHeadTimeout:
 		current := outcome.Head
 		if current == "" {
-			current = "不明"
+			current = messages.T(language, idUnknownHead)
 		}
-		say(fmt.Sprintf("wait-ci: %ds 待っても head が %s にならなかった (現在 %s)", outcome.Elapsed, outcome.Message, current))
+		verdict(idHeadTimeout, map[string]any{"Elapsed": outcome.Elapsed, "Target": outcome.Message, "Head": current})
 		return finish(3, 0, 0)
 	case waitci.StatusConflict:
-		say("wait-ci: base ブランチとコンフリクトしていて check が 1 件も起動しない。rebase か merge で解消して push し直す")
+		verdict(idConflictNoRun, nil)
 		return finish(5, 0, 0)
 	case waitci.StatusNoCI:
-		say(fmt.Sprintf("wait-ci: この repo には CI が無い (check が 0 件のまま %ds 経ち、"+
-			"workflow も直近の merged PR の check も見つからない)。監視をスキップした", outcome.Elapsed))
+		verdict(idNoCI, map[string]any{"Elapsed": outcome.Elapsed})
 		return finish(0, 0, 0)
 	case waitci.StatusEmptyTimeout:
-		say(fmt.Sprintf("wait-ci: %ds 待っても check が 1 件も登録されなかった", outcome.Elapsed))
+		verdict(idEmptyTimeout, map[string]any{"Elapsed": outcome.Elapsed})
 		return finish(3, 0, 0)
 	case waitci.StatusComplete, waitci.StatusTimeout:
 	}
@@ -349,17 +351,17 @@ func reportWaitCI(
 				pending = append(pending, check.Name)
 			}
 		}
-		say(fmt.Sprintf("wait-ci: %ds 以内に完了しなかった (pending: %s)", outcome.Elapsed, strings.Join(pending, ", ")))
+		verdict(idTimeout, map[string]any{"Elapsed": outcome.Elapsed, "Pending": strings.Join(pending, ", ")})
 		code = 3
 	case failed > 0:
-		say(fmt.Sprintf("wait-ci: %d/%d 件が失敗", failed, len(checks)))
+		verdict(idFailed, map[string]any{"Failed": failed, "Total": len(checks)})
 		code = 1
 	default:
-		say(fmt.Sprintf("wait-ci: 全 %d 件が成功", len(checks)))
+		verdict(idAllPassed, map[string]any{"Total": len(checks)})
 	}
 	if outcome.Conflicting {
 		// check は動いているので待ちは続けたが、この PR はこのままではマージできない。
-		say("wait-ci: この PR は base ブランチとコンフリクトしている")
+		verdict(idConflicting, nil)
 	}
 	say(fmt.Sprintf("PR head: %s  (%d checks, %ds)", outcome.Head, len(checks), outcome.Elapsed))
 	for _, line := range waitci.Summarize(checks, allChecks) {

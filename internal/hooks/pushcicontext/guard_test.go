@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HappyOnigiri/hhx/internal/hookrt"
 	"github.com/HappyOnigiri/hhx/internal/hooktest"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 )
 
 func TestMain(m *testing.M) {
@@ -127,7 +129,8 @@ func TestPushInjectsBashGuidance(t *testing.T) {
 	if !ok {
 		t.Fatal("push must inject")
 	}
-	mustContain(t, context, "push / PR 作成が成功した。", "`hhx wait-ci --progress` を引数なしで実行し",
+	mustContain(t, context, messages.T(hooktest.Language, idPostPush),
+		messages.Text(hooktest.Language, idGuidance, map[string]any{"Command": waitCommand, "Order": messages.T(hooktest.Language, idOrder)}),
 		"timeout:600000", "`hhx wait-ci --progress`\n")
 	mustNotContain(t, context, "functions.exec", "write_stdin")
 }
@@ -136,7 +139,8 @@ func TestCodexGetsTheCodeModeWaitLoop(t *testing.T) {
 	repos := newRepositories(t)
 	context, _ := inject(t, "git push origin HEAD", call{cwd: repos.github, codex: true})
 	mustContain(t, context, `"yield_time_ms":3600000`, "write_stdin", "exit_code",
-		`tools.exec_command({cmd:"hhx wait-ci --progress",yield_time_ms:1000})`, "hhx wait-ci 中は定期報告")
+		`tools.exec_command({cmd:"hhx wait-ci --progress",yield_time_ms:1000})`,
+		messages.Text(hooktest.Language, idCodex, map[string]any{"Label": messages.T(hooktest.Language, idLabelWaitCI), "Command": `"hhx wait-ci --progress"`}))
 	mustNotContain(t, context, "timeout:600000")
 }
 
@@ -144,7 +148,7 @@ func TestClaudeDoesNotInheritCodexInstructions(t *testing.T) {
 	repos := newRepositories(t)
 	t.Setenv("CODEX_THREAD_ID", "test-session")
 	context, _ := inject(t, "git push origin HEAD", call{cwd: repos.github})
-	mustNotContain(t, context, "functions.exec", "60秒")
+	mustNotContain(t, context, "functions.exec", "functions.wait")
 }
 
 func TestWaitIsOrderedAfterRemainingWork(t *testing.T) {
@@ -154,7 +158,7 @@ func TestWaitIsOrderedAfterRemainingWork(t *testing.T) {
 		"gh workflow run deploy.yml --ref main": map[string]any{"stdout": "https://github.com/owner/repo/actions/runs/123456789"},
 	} {
 		context, _ := inject(t, command, call{cwd: repos.github, response: response})
-		mustContain(t, context, "待機はこのターンの最後に回す", "PR 本文の更新")
+		mustContain(t, context, messages.T(hooktest.Language, idOrder))
 	}
 }
 
@@ -169,8 +173,12 @@ func TestWorkflowDispatch(t *testing.T) {
 	repos := newRepositories(t)
 	context, _ := inject(t, "gh workflow run deploy.yml --ref main", call{cwd: repos.github, codex: true,
 		response: map[string]any{"stdout": "https://github.com/owner/repo/actions/runs/123456789"}})
-	mustContain(t, context, "workflow dispatch が成功", "gh run watch 123456789 --exit-status", `"yield_time_ms":3600000`,
-		"write_stdin", "30秒ごとにモデルへ制御を戻さない", "workflow run の完了待機中は")
+	mustContain(t, context, messages.T(hooktest.Language, idPostDispatch), "gh run watch 123456789 --exit-status",
+		`"yield_time_ms":3600000`, "write_stdin",
+		messages.Text(hooktest.Language, idDispatchGuidance, map[string]any{"Order": messages.T(hooktest.Language, idOrder)}),
+		messages.Text(hooktest.Language, idCodex, map[string]any{
+			"Label": messages.T(hooktest.Language, idLabelDispatch), "Command": `"gh run watch 123456789 --exit-status"`,
+		}))
 	mustNotContain(t, context, "wait-ci --progress")
 
 	context, ok := inject(t, "gh workflow run deploy.yml -R owner/repo", call{cwd: repos.plain, codex: true,
@@ -186,7 +194,8 @@ func TestWorkflowDispatchWithoutURLPollsInOneCommand(t *testing.T) {
 	context, _ := inject(t, "gh workflow run deploy.yml --ref main -R owner/repo", call{cwd: repos.plain, codex: true,
 		response: map[string]any{"stdout": "✓ Created"}})
 	mustContain(t, context, "gh run list --event workflow_dispatch", "--workflow deploy.yml", "--branch main", "sleep 30",
-		"候補が複数あり特定できない", "90分でタイムアウト", "list_rc", "gh run watch", "-R owner/repo")
+		messages.T(hooktest.Language, idMultipleCandidates), messages.T(hooktest.Language, idRegistrationTimeout),
+		"list_rc", "gh run watch", "-R owner/repo")
 	if count := strings.Count(context, "tools.exec_command"); count != 1 {
 		t.Errorf("tools.exec_command appears %d times", count)
 	}
@@ -252,9 +261,9 @@ func TestPreToolUseInjectsBeforeThePush(t *testing.T) {
 	if !ok {
 		t.Fatal("PreToolUse must inject")
 	}
-	mustContain(t, context, "この push / PR 作成が成功したら、", "wait-ci")
+	mustContain(t, context, messages.T(hooktest.Language, idPrePush), "wait-ci")
 	context, _ = inject(t, "gh workflow run deploy.yml", call{cwd: repos.github, event: "PreToolUse"})
-	mustContain(t, context, "この workflow dispatch が成功したら、")
+	mustContain(t, context, messages.T(hooktest.Language, idPreDispatch))
 }
 
 func TestStrangePayloadsAreSilent(t *testing.T) {
@@ -283,7 +292,7 @@ func TestMissingFieldsFallBackLikeThePythonImplementation(t *testing.T) {
 	if !ok {
 		t.Fatal("a payload without the event and cwd must inject")
 	}
-	mustContain(t, context, "push / PR 作成が成功した。")
+	mustContain(t, context, messages.T(hooktest.Language, idPostPush))
 }
 
 func TestArgvPath(t *testing.T) {
@@ -406,17 +415,17 @@ func TestWorkflowWatchCommand(t *testing.T) {
 	saved := now
 	now = func() time.Time { return time.Date(2026, 9, 19, 1, 2, 3, 0, time.UTC) }
 	t.Cleanup(func() { now = saved })
-	got := workflowWatchCommand("gh workflow run 'deploy it.yml' -r feat/x -R 'o/r' --json -f a=b", map[string]any{"stdout": "Created"})
+	got := workflowWatchCommand(hooktest.Language, "gh workflow run 'deploy it.yml' -r feat/x -R 'o/r' --json -f a=b", map[string]any{"stdout": "Created"})
 	mustContain(t, got, "gh run list --event workflow_dispatch --workflow 'deploy it.yml' --branch feat/x --limit 20 "+
 		"--json databaseId,createdAt --jq 'map(select(.createdAt >= \"2026-09-19T01:01:03Z\")) | .[].databaseId' -R o/r",
 		`gh run watch "$run_id" --exit-status -R o/r`)
-	if got := workflowWatchCommand("gh workflow run x --repo=o/r", map[string]any{"stdout": "/actions/runs/42?x"}); got != "gh run watch 42 --exit-status -R o/r" {
+	if got := workflowWatchCommand(hooktest.Language, "gh workflow run x --repo=o/r", map[string]any{"stdout": "/actions/runs/42?x"}); got != "gh run watch 42 --exit-status -R o/r" {
 		t.Errorf("run URL: %q", got)
 	}
-	if got := workflowWatchCommand("gh workflow run x -Ro/r", map[string]any{"output": "/actions/runs/7"}); got != "gh run watch 7 --exit-status -R o/r" {
+	if got := workflowWatchCommand(hooktest.Language, "gh workflow run x -Ro/r", map[string]any{"output": "/actions/runs/7"}); got != "gh run watch 7 --exit-status -R o/r" {
 		t.Errorf("attached -R: %q", got)
 	}
-	if got := workflowWatchCommand("gh workflow run x", map[string]any{"stdout": "/actions/runs/7x"}); strings.HasPrefix(got, "gh run watch 7") {
+	if got := workflowWatchCommand(hooktest.Language, "gh workflow run x", map[string]any{"stdout": "/actions/runs/7x"}); strings.HasPrefix(got, "gh run watch 7") {
 		t.Errorf("a run ID must end at a URL boundary: %q", got)
 	}
 	if name, ok := workflowName([]string{"gh", "workflow", "run", "-R", "o/r", "--json", "-F", "a=b", "--flag", "wf"}); !ok || name != "wf" {
@@ -434,7 +443,7 @@ func fakeRunList(t *testing.T, body string) (int, string) {
 	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	command := workflowWatchCommand("gh workflow run deploy.yml --ref main", map[string]any{"stdout": "Created"})
+	command := workflowWatchCommand(hooktest.Language, "gh workflow run deploy.yml --ref main", map[string]any{"stdout": "Created"})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	process := exec.CommandContext(ctx, "bash", "-c", command)
@@ -455,7 +464,7 @@ func fakeRunList(t *testing.T, body string) (int, string) {
 
 func TestWaitLoopStopsOnMultipleCandidates(t *testing.T) {
 	code, stderr := fakeRunList(t, "printf '111\\n222\\n'\n")
-	if code != 2 || !strings.Contains(stderr, multipleCandidates) {
+	if code != 2 || !strings.Contains(stderr, messages.T(hooktest.Language, idMultipleCandidates)) {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 }
@@ -463,5 +472,32 @@ func TestWaitLoopStopsOnMultipleCandidates(t *testing.T) {
 func TestWaitLoopPropagatesRunListFailure(t *testing.T) {
 	if code, _ := fakeRunList(t, "exit 7\n"); code != 7 {
 		t.Fatalf("code=%d, want 7", code)
+	}
+}
+
+// Codex は additionalContextLimit を超えた注入を切る。英語は日本語より長くなりやすいので、両言語の最長の案内で確かめる。
+func TestGuidanceFitsTheCodexContextLimit(t *testing.T) {
+	limit := 0
+	for _, registration := range Definition().Registrations {
+		if registration.Agent == hookrt.Codex {
+			limit = registration.AdditionalContextLimit
+		}
+	}
+	if limit == 0 {
+		t.Fatal("the Codex registration must set additionalContextLimit")
+	}
+	// run ID の無い dispatch が最長になる（登録確認ループのコマンドを JSON 文字列で埋め込む）。
+	long := "gh workflow run " + strings.Repeat("w", 100) + ".yml --ref " + strings.Repeat("r", 100) + " -R owner/repo"
+	for _, language := range []i18n.Language{i18n.English, i18n.Japanese} {
+		for _, input := range []*invocation{
+			{command: "git push origin HEAD", event: "PostToolUse", codex: true},
+			{command: long, event: "PostToolUse", codex: true, response: map[string]any{"stdout": "Created"}},
+			{command: long, event: "PreToolUse", codex: true},
+		} {
+			text := guidanceText(language, input, triggerKind(input.command))
+			if len(text) > limit {
+				t.Errorf("%s: %q is %d bytes, over the limit %d", language, input.command, len(text), limit)
+			}
+		}
 	}
 }
