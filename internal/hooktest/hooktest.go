@@ -36,6 +36,13 @@ type Options struct {
 // 出力は PreToolUse の hookSpecificOutput だけを持つ JSON であることを確かめる。
 func Run(t *testing.T, definition hookrt.Definition, raw string, options Options) Result {
 	t.Helper()
+	return parse(t, []byte(Output(t, definition, raw, options)))
+}
+
+// Output は definition を Run と同じ経路で起動し、stdout をそのまま返す。
+// 注入系の hook（平文や additionalContext を出すもの）のテストで使う。
+func Output(t *testing.T, definition hookrt.Definition, raw string, options Options) string {
+	t.Helper()
 	var cfg *config.Config
 	if options.Config != "" {
 		path := filepath.Join(t.TempDir(), "config.yaml")
@@ -55,7 +62,7 @@ func Run(t *testing.T, definition hookrt.Definition, raw string, options Options
 		Stdout:     &out,
 		LoadConfig: func() (*config.Config, error) { return cfg, nil },
 	})
-	return parse(t, out.Bytes())
+	return out.String()
 }
 
 // Stdin は definition を stdin の raw で、設定ファイルの無い状態で起動する。
@@ -150,4 +157,44 @@ func Commands(commands ...string) []Case {
 		cases[index] = Case{Command: command}
 	}
 	return cases
+}
+
+// Injection は注入系の hook の出力を読んだものである。
+type Injection struct {
+	// Event は hookSpecificOutput.hookEventName で、注入が無ければ空である。
+	Event string
+	// Context は hookSpecificOutput.additionalContext である。
+	Context string
+	// SystemMessage は利用者への警告（最上位の systemMessage）である。
+	SystemMessage string
+}
+
+// ParseInjection は注入系の hook の出力を読む。無出力なら零値を返す。
+// 判断のフィールド（permissionDecision や decision）を返していないことも確かめる。
+func ParseInjection(t *testing.T, output string) Injection {
+	t.Helper()
+	if strings.TrimSpace(output) == "" {
+		return Injection{}
+	}
+	var data struct {
+		SystemMessage      string `json:"systemMessage"`
+		HookSpecificOutput *struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(output))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&data); err != nil {
+		t.Fatalf("output is not an injection: %v: %q", err, output)
+	}
+	if strings.Contains(output, "permissionDecision") || strings.Contains(output, `"decision"`) {
+		t.Fatalf("an injection must not return a decision: %q", output)
+	}
+	injection := Injection{SystemMessage: data.SystemMessage}
+	if data.HookSpecificOutput != nil {
+		injection.Event = data.HookSpecificOutput.HookEventName
+		injection.Context = data.HookSpecificOutput.AdditionalContext
+	}
+	return injection
 }

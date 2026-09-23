@@ -35,6 +35,7 @@ if TARGET not in ("hhx", "python"):
 
 # hhx へ移植済みの hook 名。移植した hook はここへ足し、その L1・L3 を hhx に向けて全件通す。
 PORTED_HOOKS = frozenset({
+    "agents-local-context",
     "dangerous-rm-guard",
     "discard-guard",
     "exit-plan-subagent-guard",
@@ -42,7 +43,10 @@ PORTED_HOOKS = frozenset({
     "git-hookspath-guard",
     "idle-wait-guard",
     "irreversible-guard",
+    "pr-body-staleness",
+    "pr-context",
     "pr-merge-guard",
+    "push-ci-context",
 })
 
 # hhx で既定では無効な hook。Python 実装は常に有効なので、互換スイートでは設定ファイルで有効にして流す。
@@ -105,6 +109,17 @@ if TARGET == "hhx":
     os.environ["HHX_CONFIG"] = os.path.join(HOOK_RUN_CWD, "hhx-config.yaml")
     with open(os.environ["HHX_CONFIG"], "w", encoding="utf-8") as _config:
         _config.write("hooks:\n" + "".join(f"  {name}:\n    enabled: true\n" for name in DEFAULT_OFF_HOOKS))
+
+# hhx は状態とキャッシュを $XDG_CACHE_HOME/hhx (無ければ ~/.cache/hhx) に置く。テストは HOME を差し替えて隔離するので、
+# 開発者の XDG_CACHE_HOME を外す。Python 実装は ~/.claude/cache と $CODEX_HOME/hook-state に置いていた。
+if TARGET == "hhx":
+    os.environ.pop("XDG_CACHE_HOME", None)
+
+# pr-context のキャッシュの置き場所 (HOME からの相対パス)。注入済みの記録はその下の sessions に置く。
+PR_CONTEXT_CACHE = ".cache/hhx/pr-context" if TARGET == "hhx" else ".claude/cache/pr-context"
+
+# push-ci-context が案内する待機コマンド。hhx では内蔵の wait-ci に固定した。
+WAIT_CI_COMMAND = "hhx wait-ci --progress" if TARGET == "hhx" else "wait-ci --progress"
 
 # fixture の git 呼び出しをユーザーの設定から切り離す。
 # ~/.config/git 側で core.hooksPath が設定されているため、これを外さないと

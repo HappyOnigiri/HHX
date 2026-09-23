@@ -21,7 +21,7 @@ import time
 import unittest
 from pathlib import Path
 
-from helpers import FAKE_GH, GIT_ISOLATION, git, hook_command, load_hook, run_prompt_hook
+from helpers import FAKE_GH, GIT_ISOLATION, PR_CONTEXT_CACHE, git, hook_command, load_hook, run_prompt_hook
 
 SCRIPT = "pr-context.py"
 mod = load_hook(SCRIPT, seed="hook-test-no-op")
@@ -226,7 +226,7 @@ class OutputTest(ContractTestCase):
         for state in ("CLOSED", "MERGED"):
             with self.subTest(state=state):
                 self.set_pr("o/r", 10088, pr(state=state, mergeable="CONFLICTING"))
-                for path in Path(self.home).glob("**/cache/pr-context/*.json"):
+                for path in Path(self.home, PR_CONTEXT_CACHE).glob("*.json"):
                     path.unlink()
                 self.assertNotIn("CONFLICT",
                                  self.run_hook("https://github.com/o/r/pull/10088",
@@ -334,7 +334,7 @@ class CacheTest(ContractTestCase):
     """取得キャッシュ (repo#num / 90 秒 / 全セッション共有)。"""
 
     def cache_dir(self):
-        return Path(self.home, ".claude/cache/pr-context")
+        return Path(self.home, PR_CONTEXT_CACHE)
 
     def test_second_call_uses_cache(self):
         self.run_hook("https://github.com/o/r/pull/10088", session="s1")
@@ -362,7 +362,7 @@ class CacheTest(ContractTestCase):
         """owner/repo は URL 由来なので、ファイル名に落とすときの安全性を固定する。"""
         self.run_hook("https://github.com/../../etc/pull/1")
         for path in Path(self.home).glob("**/*.json"):
-            self.assertIn("cache/pr-context", str(path),
+            self.assertIn(PR_CONTEXT_CACHE, str(path),
                           "キャッシュ外に書き出しています: %s" % path)
 
 
@@ -370,7 +370,7 @@ class SessionTest(ContractTestCase):
     """注入済み記録 (session + repo#num / 24 時間 / セッション内)。"""
 
     def session_dir(self):
-        return Path(self.home, ".claude/cache/pr-context/sessions")
+        return Path(self.home, PR_CONTEXT_CACHE, "sessions")
 
     def test_same_session_same_content_is_suppressed(self):
         first = self.run_hook("https://github.com/o/r/pull/10088", session="s1")
@@ -386,7 +386,7 @@ class SessionTest(ContractTestCase):
     def test_changed_content_is_reinjected(self):
         self.run_hook("https://github.com/o/r/pull/10088", session="s1")
         self.set_pr("o/r", 10088, pr(state="MERGED", mergeCommit={"oid": "d" * 40}))
-        for path in Path(self.home, ".claude/cache/pr-context").glob("*.json"):
+        for path in Path(self.home, PR_CONTEXT_CACHE).glob("*.json"):
             os.utime(path, (0, 0))  # 取得キャッシュを失効させる
         out = self.run_hook("https://github.com/o/r/pull/10088", session="s1")
         self.assertIn("MERGED", out, "状態が変われば同じセッションでも出し直すはず")
@@ -514,7 +514,7 @@ class ArgvTest(ContractTestCase):
                                   cwd=self.neutral, env=env)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertIn("o/r#10088", proc.stdout)
-        self.assertFalse(Path(self.home, ".claude/cache/pr-context/sessions").exists(),
+        self.assertFalse(Path(self.home, PR_CONTEXT_CACHE, "sessions").exists(),
                          "デバッグ実行はセッション記録を作らない")
 
 

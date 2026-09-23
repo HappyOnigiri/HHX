@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helpers import GIT_ISOLATION, git, hook_command
+from helpers import GIT_ISOLATION, TARGET, git, hook_command
 
 
 SCRIPT = "agents-local-context.py"
@@ -34,11 +34,13 @@ class AgentsLocalContextTest(unittest.TestCase):
         self.codex_home = self.tmp / "codex-home"
 
     def environment(self, codex_home=None):
+        # hhx は状態を $XDG_CACHE_HOME/hhx に置くので、CODEX_HOME の代わりに XDG_CACHE_HOME で隔離する。
+        state_home = "XDG_CACHE_HOME" if TARGET == "hhx" else "CODEX_HOME"
         return {
             **os.environ,
             **GIT_ISOLATION,
             "HOME": str(self.tmp),
-            "CODEX_HOME": str(codex_home or self.codex_home),
+            state_home: str(codex_home or self.codex_home),
         }
 
     def payload(
@@ -195,7 +197,9 @@ PY"""
 
         data = self.output(self.run_hook(codex_home=invalid_home))
 
-        self.assertIn("状態DBを利用できない", data["systemMessage"])
+        # hhx は SQLite をやめてファイルに記録するので、警告の語を変えた。
+        self.assertIn("状態ファイルを利用できない" if TARGET == "hhx" else "状態DBを利用できない",
+                      data["systemMessage"])
         self.assertIn("root-local", data["hookSpecificOutput"]["additionalContext"])
         self.assertNotIn("decision", data)
 

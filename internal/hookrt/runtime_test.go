@@ -64,6 +64,37 @@ func TestAddContextAndPrint(t *testing.T) {
 	}
 }
 
+func TestNotifyWritesOnlyTheGivenParts(t *testing.T) {
+	for _, testCase := range []struct {
+		text, message, want string
+	}{
+		{"ctx", "", `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"ctx <&>"}}`},
+		{"", "warn", `{"systemMessage":"warn <&>"}`},
+		{"ctx", "warn", `{"systemMessage":"warn <&>","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"ctx <&>"}}`},
+		{"", "", ""},
+	} {
+		definition := &Definition{Name: "n", DefaultEnabled: true, Run: func(c *Context) error {
+			c.Deny("replaced")
+			text, message := testCase.text, testCase.message
+			if text != "" {
+				text += " <&>"
+			}
+			if message != "" {
+				message += " <&>"
+			}
+			c.Notify("SessionStart", text, message)
+			return nil
+		}}
+		want := testCase.want
+		if want != "" {
+			want += "\n"
+		}
+		if got := invoke(definition, "{}"); got != want {
+			t.Errorf("Notify(%q, %q) wrote %q, want %q", testCase.text, testCase.message, got, want)
+		}
+	}
+}
+
 func TestFailuresAreSilent(t *testing.T) {
 	for name, run := range map[string]func(*Context) error{
 		"error": func(c *Context) error {

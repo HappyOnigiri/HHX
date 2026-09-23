@@ -22,6 +22,10 @@ HHX_COMPAT_TARGET=python HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレク�
 | `HHX_COMPAT_PYTHON_WAIT_CI` | Python 実装の `wait-ci`。渡すと wait-ci の差分テストが流れる。`python` では、渡さなければ wait-ci のテストを skip する |
 
 対象が `hhx` で `HHX_COMPAT_PYTHON_HOOKS` を渡したときは、差分テスト（`test_differential.py`）も流れる。
+注入系の hook（push-ci-context・pr-body-staleness・pr-context・agents-local-context）は、判定の代わりに注入の内容を比べる。
+push-ci-context は待機コマンドの文面（`wait-ci` → `hhx wait-ci`）を置き換え、workflow run を絞る時刻を伏せてから比べる。
+pr-body-staleness は origin を変形して、注入の内容と gh の呼び出し（owner・repo）を比べる（後読みを手書きの走査にしたため）。
+agents-local-context は 1 件ごとに別の session_id で起動し、警告は種類（`:` の前）だけを比べる。
 同じ入力を Python 本体（プロセス内で `main` を呼ぶ）と `hhx hook <name>` の両方に通し、判定と理由文
 （発火したルールのラベルと、抽出したトークン・解決後のパス）が一致するかを比べる。
 入力は既存のテストがフックに渡している入力と、それに境界の断片（区切り文字・クォート・`>`・`.pub`・`.env.<x>`・
@@ -88,6 +92,11 @@ HHX_COMPAT_PYTHON_WAIT_CI=<Python 実装の wait-ci> make compat-test
 - `test_irreversible_guard.py` の G 類（ガードファイル）は、保護対象を hhx の実行ファイル・`~/.config/hhx`・hook の登録ファイルに
   置き換えた。旧配布先（`~/.claude/hooks`・`~/.codex/hooks`）と dotfiles の正本は、hhx では通過を期待し、Python では元の deny のまま流す。
   `WT_AGENT_WORKTREE_POLICY` を前提にした `OnDemandFileToolPassThroughTest` は、hhx では skip する。
+- 状態とキャッシュの置き場所を hhx の置き場所（`$XDG_CACHE_HOME/hhx`、既定は `~/.cache/hhx`）へ移したので、
+  `test_pr_context.py` はキャッシュのパスを `helpers.PR_CONTEXT_CACHE` で、`test_agents_local_context.py` は隔離を
+  `CODEX_HOME` の代わりに `XDG_CACHE_HOME` で行う。`helpers.py` は、hhx を対象にするとき開発者の `XDG_CACHE_HOME` を外す。
+  agents-local-context の状態を使えないときの警告は、SQLite をやめたので「状態DB」を「状態ファイル」にした。
+- `test_push_ci_context.py` は、hhx では待機コマンドが `hhx wait-ci --progress` であることを `helpers.WAIT_CI_COMMAND` で確かめる。
 - `test_worktree_guard.py` は、hhx では snapshot の ref・作成者・一時 index の名前を新しい値（`refs/hhx/discard-snapshot`、
   `hhx <hhx@localhost>`、`hhx-discard-snapshot.index`）で確かめる。`helpers.snapshot_ref_exists` の既定の ref も同じく切り替える。
   ブランチ attach の deny（`DetachedWorktreePolicyTest`）は wx へ移るので、hhx では skip する。

@@ -6,7 +6,8 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 ## 不変条件
 
 - `hhx hook <name>` はどの経路でも終了コード 0 で終わる（名前を省いた手入力は usage を出して 2）。未知の名前・壊れた設定・本体のエラーや panic は無出力にする（fail-open）。
-- PreToolUse を通すときは何も出力しない。`allow` と `ask` は返さない（`ask` は Codex が解釈しない）。
+- PreToolUse を通すときは判断を出力しない。`allow` と `ask` は返さない（`ask` は Codex が解釈しない）。
+  注入系の hook（agents-local-context など）は判断のフィールドを持たない additionalContext と systemMessage だけを返す。
 - `hhx install` / `uninstall` は hhx のエントリ（先頭トークンの basename が `hhx`、2 番目が `hook`）だけを扱う。
   wx や利用者の hook は、同じグループにも入れないし消しもしない。
 - install は冪等で、hhx のエントリに変化が無ければファイルに触らない。
@@ -15,7 +16,10 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - 各 hook のコマンド解析（シェルのトークナイザ）は共通化しない。hook ごとに誤爆の条件が調整されており、共通化すると判定が変わり得る。
   共通化するのは `internal/hookrt` の payload の読み込み・出力スキーマ・実行時の保護と、
   `internal/pycompat` の Python の文字列・正規表現の意味の再現だけとする。
+  Python の `shlex` の字句解析そのもの（`pycompat.ShlexSplit`）は再現の部品として共有してよいが、
+  空白と区切りの文字、区切った後のトークンの解釈は hook ごとに決める（push-ci-context と agents-local-context で設定が違う）。
 - 全 Bash 呼び出しで走るため、一次ゲート（生の入力の部分一致）を設定の読み込みより前に置き、そこまでを軽く保つ。
+  agents-local-context は移植元と同じく一次ゲートを持たず、Codex の全 PreToolUse で判定する（git の呼び出しは実行の中で使い回す）。
 
 ## 構成
 
@@ -23,8 +27,12 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `internal/hookrt`: hook の定義と実行時の共通処理
 - `internal/registry`: hook の一覧。install と `hhx hook` の振り分けはここから作る
 - `internal/hooks/<name>`: hook 本体。1 hook 1 パッケージ（下の「hook の移植の型」）
-- `internal/pycompat`: Python の `\s`・`\d`・`\b`・`str.split()`・`splitlines()`・`str.lower()`・`json.dumps`・`os.path` の再現
-- `internal/hooktest`: hook のテストの補助（テストからだけ使う）
+- `internal/pycompat`: Python の `\s`・`\d`・`\b`・`str.split()`・`splitlines()`・`str.lower()`・`json.dumps`・`os.path`・`shlex` の再現
+- `internal/hookexec`: hook から git・gh を時間の上限付きで起動する。gh は PATH から探すので、テストでは偽の gh で差し替えられる
+- `internal/hookcache`: 失っても害のない hook の状態（取得のキャッシュ・注入済みの記録）の置き場（`$XDG_CACHE_HOME/hhx/<hook>`）
+- `internal/toolresponse`: PostToolUse の実行結果（tool_response）の成功の判定。push-ci-context と pr-body-staleness が共有する
+- `internal/hooktest`: hook のテストの補助（テストからだけ使う）。偽の gh（`compat/fake_gh.py` と同じ規約）と、
+  HOME・作業ディレクトリ・git の設定を隔離する `Main` を持つ
 - `internal/install`: Claude の settings.json と Codex の hooks.json の読み書き
 - `internal/config`: `~/.config/hhx/config.yaml` の読み込み
 - `internal/update`: GitHub Releases の確認と、Release 添付の `install.sh` による更新（`hhx update`）
@@ -46,7 +54,9 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
   `ci.yml` の `name:`、アップロードのステップ名、artifact の名前、profile は reporter との契約で、`make reporter-check` が突き合わせる。
 - CI のランナーには本物の gh があり、git の利用者設定が無い。gh を使うテストは偽の gh を PATH の先頭に置き、`GH_TOKEN` を渡さない。
   git を使うテストは `GIT_CONFIG_GLOBAL=/dev/null` と `GIT_CONFIG_SYSTEM=/dev/null` で隔離し、作成者を `-c user.name=... -c user.email=...` で渡す。
-- hook の実行中にネットワークへ出ない。更新の確認は `hhx update` を明示的に実行したときだけ行う。
+- hhx 自身は hook の実行中にネットワークへ出ない。更新の確認は `hhx update` を明示的に実行したときだけ行う。
+  GitHub の情報が要る hook（pr-context・pr-body-staleness）は、PATH 上の gh を子プロセスで起動して認証と通信を任せる。
+  API を Go から直接呼ばない（認証を gh に任せ、テストで偽の gh に差し替えるため）。
 - install のテストは一時的な HOME で行い、実機の設定ファイルに触れない。
 - コメントは日本語で書き、保守に必要な意図・制約・契約だけを残す。
 
@@ -58,7 +68,7 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
   - `guard.go`: `Definition()`（名前・既定の有効・登録先・一次ゲート・`Run`）と判定のロジック。
     登録先は移植元の Claude の settings と Codex の hooks.json の matcher をそのまま写す。
   - `messages.go`: 理由文。回避を思いとどまらせるのは理由文だけなので、迂回せず報告するよう文面で促す。
-    Claude Code と Codex の両方に出るので、片方にしか無いツール名を書かない。
+    Claude Code と Codex の両方に出るので、片方にしか無いツール名を書かない。注入系の hook では、注入する文面と警告をここに置く。
   - `guard_test.go`
 - `internal/registry` の一覧へ、移植元の登録順の位置に足す。Makefile の `GO_COVERAGE_PACKAGES` にも足す。
 - 判定は Python の意味を 1 対 1 で移す。書き直して「より正しく」しない。気付いた穴は README の Limits に書くか、別の作業に回す。
@@ -90,5 +100,12 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
   - テストには実際の禁止語や個人のパスを書かず、架空の値（`acme-internal`、`/Users/alice`）を使う。
   - cwd が空のときやデバッグ経路でプロセスの作業ディレクトリを使う hook のテストは、`TestMain` で git 管理下でない一時ディレクトリへ移る
     （discard-guard はそこに snapshot を作ろうとするので、パッケージのディレクトリのままだと開発中のリポジトリに ref を作る）。
+- 注入系の hook（判断を返さずコンテキストを足すもの）は `hookrt.Context` の `AddContext`・`Print`・`Notify` で出力する。
+  - Go のテストは `hooktest.Output` で stdout を受け、`hooktest.ParseInjection` で判断のフィールドが無いことまで確かめる。
+  - gh を呼ぶ hook のテストは `TestMain` で `hooktest.Main` を呼び、`hooktest.NewFakeGH` で偽の gh を PATH の先頭に置く。
+    偽の gh の実体はテストのバイナリで、フィクスチャと呼び出しの記録は `compat/fake_gh.py` と同じ名前と形にする。
+  - 状態は `internal/hookcache` の下に hook ごとのディレクトリを作って置く（0700 と 0600）。複数のプロセスが同じ記録を読み書きするなら、
+    ロック用のファイルへの flock で排他する（agents-local-context）。
+  - Python の `str()` と真偽の意味が要る値（tool_response の出力など）は `toolresponse.PyStr`・`toolresponse.Truthy` を使う。
 - 互換スイートでは、`compat/helpers.py` の `PORTED_HOOKS` に足し、`make compat-test` で L1 と argv の経路が全件通ることを確かめる。
   既定で無効にした hook は `DEFAULT_OFF_HOOKS` にも足す（互換スイートは設定ファイルで有効にして流す）。

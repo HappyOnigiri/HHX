@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -84,14 +87,102 @@ func TestInstallAndUninstallRegisteredHooks(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, definition := range registry.All() {
-			if !strings.Contains(string(data), binary+" hook "+definition.Name) {
-				t.Fatalf("install did not register %s: %s", definition.Name, data)
+			claude := false
+			for _, registration := range definition.Registrations {
+				claude = claude || registration.Agent == hookrt.Claude
+			}
+			if registered := strings.Contains(string(data), binary+" hook "+definition.Name); registered != claude {
+				t.Fatalf("install registered %s=%v, want %v: %s", definition.Name, registered, claude, data)
 			}
 		}
 	}
 	data, err := os.ReadFile(settings)
 	if err != nil || strings.Contains(string(data), " hook ") || !strings.Contains(string(data), `"model": "opus"`) {
 		t.Fatalf("uninstall must remove only hhx entries: %q", data)
+	}
+}
+
+// hookLayout は設定ファイルの hooks を「イベント → グループ（matcher: エントリ, ...）」の読みやすい形にする。
+func hookLayout(t *testing.T, path, binary string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Hooks map[string][]struct {
+			Matcher *string          `json:"matcher"`
+			Hooks   []map[string]any `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	events := make([]string, 0, len(document.Hooks))
+	for event := range document.Hooks {
+		events = append(events, event)
+	}
+	sort.Strings(events)
+	var lines []string
+	for _, event := range events {
+		for _, group := range document.Hooks[event] {
+			matcher := "(none)"
+			if group.Matcher != nil {
+				matcher = *group.Matcher
+			}
+			var entries []string
+			for _, entry := range group.Hooks {
+				command, _ := entry["command"].(string)
+				text := strings.TrimPrefix(command, binary+" hook ")
+				for _, key := range []string{"timeout", "statusMessage", "additionalContextLimit"} {
+					if value, ok := entry[key]; ok {
+						text += fmt.Sprintf(" %s=%v", key, value)
+					}
+				}
+				entries = append(entries, text)
+			}
+			lines = append(lines, event+" ["+matcher+"] "+strings.Join(entries, ", "))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// TestInstallWritesTheMigratedRegistrations は、install が移行元（Python 実装）と同じイベント・matcher・付加項目で
+// 登録することを確かめる。移行元の登録から、hhx に入れない hook（wx へ移すものと削除するもの）を除いた形である。
+func TestInstallWritesTheMigratedRegistrations(t *testing.T) {
+	home, binary := isolate(t)
+	for _, dir := range []string{".claude", ".codex"} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, stdout, stderr := runCommand(t, "", "install"); code != 0 {
+		t.Fatalf("install: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	claude := strings.Join([]string{
+		"PostToolUse [Bash] push-ci-context timeout=10, pr-body-staleness timeout=15 statusMessage=Checking PR body freshness...",
+		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, dangerous-rm-guard, " +
+			"forbidden-term-guard, idle-wait-guard",
+		"PreToolUse [Edit|Write|MultiEdit|NotebookEdit] git-hookspath-guard, irreversible-guard",
+		"PreToolUse [ExitPlanMode] exit-plan-subagent-guard",
+		"UserPromptSubmit [(none)] pr-context timeout=15 statusMessage=Fetching PR context...",
+	}, "\n")
+	if got := hookLayout(t, filepath.Join(home, ".claude", "settings.json"), binary); got != claude {
+		t.Errorf("claude:\n%s\nwant\n%s", got, claude)
+	}
+	codex := strings.Join([]string{
+		"PostToolUse [Bash] push-ci-context timeout=10 additionalContextLimit=4096, " +
+			"pr-body-staleness timeout=15 statusMessage=Checking PR body freshness... additionalContextLimit=4096",
+		"PreToolUse [(none)] agents-local-context timeout=10 additionalContextLimit=32768",
+		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, forbidden-term-guard, idle-wait-guard",
+		"PreToolUse [^(apply_patch|Edit|Write)$] git-hookspath-guard, irreversible-guard",
+		"SessionStart [(none)] agents-local-context timeout=10 additionalContextLimit=32768",
+		"SessionStart [^compact$] agents-local-context timeout=10 additionalContextLimit=32768",
+		"SubagentStart [(none)] agents-local-context timeout=10 additionalContextLimit=32768",
+		"UserPromptSubmit [(none)] pr-context timeout=15 statusMessage=Fetching PR context...",
+	}, "\n")
+	if got := hookLayout(t, filepath.Join(home, ".codex", "hooks.json"), binary); got != codex {
+		t.Errorf("codex:\n%s\nwant\n%s", got, codex)
 	}
 }
 

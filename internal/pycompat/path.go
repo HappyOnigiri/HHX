@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/user"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -233,4 +234,62 @@ func reversed(items []string) []string {
 		out[len(items)-1-index] = item
 	}
 	return out
+}
+
+// Expanduser は os.path.expanduser である。~ は HOME 環境変数（無ければパスワードデータベース）で、
+// ~user はパスワードデータベースで展開し、どちらも得られなければ path をそのまま返す。
+// ~user は CGO を使わない build では /etc/passwd だけを引くので、macOS の Directory Services にだけいる利用者は展開しない。
+func Expanduser(path string) string {
+	if !strings.HasPrefix(path, "~") {
+		return path
+	}
+	end := strings.Index(path[1:], "/") + 1
+	if end == 0 {
+		end = len(path)
+	}
+	var home string
+	if end == 1 {
+		value, ok := os.LookupEnv("HOME")
+		if !ok {
+			account, err := user.LookupId(strconv.Itoa(os.Getuid()))
+			if err != nil {
+				return path
+			}
+			value = account.HomeDir
+		}
+		home = value
+	} else {
+		account, err := user.Lookup(path[1:end])
+		if err != nil {
+			return path
+		}
+		home = account.HomeDir
+	}
+	if expanded := strings.TrimRight(home, "/") + path[end:]; expanded != "" {
+		return expanded
+	}
+	return "/"
+}
+
+// expandvarsRE は posixpath._varpattern（re.ASCII）である。
+var expandvarsRE = regexp.MustCompile(`\$([A-Za-z0-9_]+|\{[^}]*\}?)`)
+
+// Expandvars は os.path.expandvars である。$name と ${name} を環境変数で置き換え、無い変数と閉じない ${ はそのまま残す。
+func Expandvars(path string) string {
+	if !strings.Contains(path, "$") {
+		return path
+	}
+	return expandvarsRE.ReplaceAllStringFunc(path, func(match string) string {
+		name := match[1:]
+		if strings.HasPrefix(name, "{") {
+			if !strings.HasSuffix(name, "}") || len(name) < 2 {
+				return match
+			}
+			name = name[1 : len(name)-1]
+		}
+		if value, ok := os.LookupEnv(name); ok {
+			return value
+		}
+		return match
+	})
 }
