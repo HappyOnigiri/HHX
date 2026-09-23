@@ -32,6 +32,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
@@ -541,7 +542,10 @@ func (r gitRunner) run(directory string, env []string, stdin string, args ...str
 	if env != nil {
 		command.Env = append(os.Environ(), env...)
 	}
-	// 子孫のプロセスが出力を開いたまま残っても、タイムアウトの後に待ち続けない。
+	// タイムアウトでは SIGKILL ではなく SIGTERM で止める。git は SIGTERM を捕捉して一時 index の lock を消すが、
+	// SIGKILL だと lock が残り、以後その作業ツリーの snapshot が失敗し続ける（破棄系のコマンドがすべて deny になる）。
+	command.Cancel = func() error { return command.Process.Signal(syscall.SIGTERM) }
+	// SIGTERM で終わらない場合と、子孫のプロセスが出力を開いたまま残った場合に、この猶予の後に kill して待ち続けない。
 	command.WaitDelay = time.Second
 	if stdin != "" {
 		command.Stdin = strings.NewReader(stdin)

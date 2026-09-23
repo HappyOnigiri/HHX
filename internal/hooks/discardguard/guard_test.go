@@ -1346,6 +1346,38 @@ func TestTimeBudgetFallsToDeny(t *testing.T) {
 	expectDeny(t, "git reset --hard", tempDir(t), failedMark)
 }
 
+// 時間切れの git は SIGTERM で止め、git が lock を消せるようにする。SIGKILL だと一時 index の lock が残り、
+// 以後その作業ツリーの破棄系のコマンドがすべて deny になる。
+func TestTimeoutLetsGitRemoveItsLock(t *testing.T) {
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("sleep is not available")
+	}
+	rm, err := exec.LookPath("rm")
+	if err != nil {
+		t.Skip("rm is not available")
+	}
+	lock := filepath.Join(tempDir(t), "index.lock")
+	bin := mkdir(t, filepath.Join(tempDir(t), "bin"))
+	script := "#!/bin/sh\n" +
+		"trap '" + rm + " -f \"" + lock + "\"; exit 143' TERM\n" +
+		": > \"" + lock + "\"\n" +
+		"while :; do " + sleep + " 0.05; done\n"
+	writeFile(t, filepath.Join(bin, "git"), script)
+	if err := os.Chmod(filepath.Join(bin, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	savedBudget, savedTimeout := timeBudget, gitTimeout
+	timeBudget, gitTimeout = 500*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { timeBudget, gitTimeout = savedBudget, savedTimeout })
+
+	expectDeny(t, "git reset --hard", tempDir(t), failedMark)
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Errorf("lock must be removed by the terminated git: %v", err)
+	}
+}
+
 // --- L3: git worktree の環境。「どの作業ツリーを保存したか」を中身で確かめる -----------
 //
 // git は cwd / -C / --git-dir / --work-tree / GIT_DIR のどの指定でも基準が変わる。取り違えると
