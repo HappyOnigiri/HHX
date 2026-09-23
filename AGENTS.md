@@ -25,7 +25,9 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `internal/config`: `~/.config/hhx/config.yaml` の読み込み
 - `internal/update`: GitHub Releases の確認と、Release 添付の `install.sh` による更新（`hhx update`）
 - `scripts/`: 配布物のビルド、インストーラーとアンインストーラー、それらのテスト
-- `.github/workflows/`: CI とリリース（[docs/release.md](docs/release.md)）
+- `.github/workflows/`: CI とリリース（[docs/release.md](docs/release.md)）、flaky なテストの起票（`report-flaky-tests.yml`）
+- `.github/scripts/`: flaky なテストの issue を起票する reporter（`actions/github-script` から呼ぶ）
+- `tools/`: 開発用の補助ツール。`tools/citest` は CI のテストで落ちたテストだけを 1 回再実行し、報告を artifact に残す
 - `compat/`: 移行期間だけ置く Python の互換スイート（[compat/README.md](compat/README.md)）
 
 ## 開発
@@ -34,6 +36,9 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
   互換スイートは Python 実装を参照するので CI では流さず、`make check`（`make ci` と `make compat-test`）で手元でだけ流す。
 - CI のジョブは Makefile のターゲットを 1 つずつ走らせる。検査を足すときは Makefile に書き、`ci-checks` と `ci.yml` の matrix の両方へ足す。
 - hook を移植したら、そのパッケージを Makefile の `GO_COVERAGE_PACKAGES` に足す。
+- CI のテストは citest 経由で走り、落ちたテストを 1 回だけ再実行する。再実行で通ったテストは CI を落とさず、
+  CI の完了後に `report-flaky-tests.yml` がテストごとに issue を起票する。再実行でも落ちれば CI は失敗する。
+  `ci.yml` の `name:`、アップロードのステップ名、artifact の名前、profile は reporter との契約で、`make reporter-check` が突き合わせる。
 - CI のランナーには本物の gh があり、git の利用者設定が無い。gh を使うテストは偽の gh を PATH の先頭に置き、`GH_TOKEN` を渡さない。
   git を使うテストは `GIT_CONFIG_GLOBAL=/dev/null` と `GIT_CONFIG_SYSTEM=/dev/null` で隔離し、作成者を `-c user.name=... -c user.email=...` で渡す。
 - hook の実行中にネットワークへ出ない。更新の確認は `hhx update` を明示的に実行したときだけ行う。

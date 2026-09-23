@@ -38,8 +38,11 @@ jobs:
             go: true
           - target: mod-tidy-check
             go: true
+          # citest-profile を持つジョブは、落ちたテストだけを 1 回再実行する citest 経由でテストを走らせ、
+          # 報告を artifact に上げる。名前は report-flaky-tests.cjs が照合する契約である。
           - target: test-race-coverage
             go: true
+            citest-profile: race-coverage
           - target: release-check
             go: true
           # git describe がタグを読めるよう、このジョブだけ履歴とタグを取得する。
@@ -48,6 +51,7 @@ jobs:
             full-history: true
           - target: install-test
           - target: uninstall-test
+          - target: reporter-check
     steps:
       - uses: actions/checkout@v7
         with:
@@ -61,7 +65,22 @@ jobs:
         with:
           cache-name: ${{ matrix.target }}
           extra-cache-paths: ${{ matrix.go-cache-extra-paths }}
+      - name: Build CI test runner
+        if: matrix.citest-profile
+        run: go build -trimpath -o bin/citest ./tools/citest
       - run: make ${{ matrix.target }}
+        env:
+          CITEST: ${{ matrix.citest-profile && 'bin/citest' || '' }}
+      # 再実行で通ったテストは CI を落とさないので、flaky の記録はこの artifact にだけ残る。
+      # report-flaky-tests.yml が CI の完了後にこれを読み、issue を起票する。
+      - name: Upload CI test report
+        if: ${{ always() && matrix.citest-profile }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-tests-${{ matrix.citest-profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ci-tests/${{ matrix.citest-profile }}
+          if-no-files-found: error
+          retention-days: 30
       - name: Verify CI is read-only
         run: |
           git diff --exit-code || {

@@ -11,12 +11,16 @@ GO_COVERAGE_PACKAGES := ./cmd/hhx ./internal/config ./internal/hookrt ./internal
 	./internal/update ./internal/version
 GOLANGCI_LINT_VERSION := $(shell awk '$$1 == "golangci-lint" { print $$2 }' .tool-versions)
 GOLANGCI_LINT := bin/golangci-lint
+# CI は CITEST に citest のパスを渡し、落ちたテストだけを 1 回再実行して報告を CI_TEST_ARTIFACT_DIR に残す。
+# 空なら go test をそのまま走らせる。
+CITEST ?=
+CI_TEST_ARTIFACT_DIR ?= artifacts/ci-tests
 # `make ci` は CPU 数だけジョブを並列に走らせる。`make ci CI_JOBS=4` で上書きできる。
 CI_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 # GNU make 4 は並列ジョブの出力をまとめて表示するが、GNU make 3.81 (macOS) は混ざる。
 CI_MAKEFLAGS := -j$(CI_JOBS) --keep-going $(if $(filter output-sync,$(.FEATURES)),--output-sync=target)
 
-.PHONY: build install fmt lint go-lint go-deadcode mod-tidy-check markdown-lint test test-race-coverage \
+.PHONY: build install fmt lint go-lint go-deadcode mod-tidy-check markdown-lint reporter-check test test-race-coverage \
 	version-check release release-check install-test uninstall-test compat-test ci ci-checks check $(GOLANGCI_LINT)
 
 build:
@@ -53,6 +57,10 @@ $(GOLANGCI_LINT):
 		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v$(GOLANGCI_LINT_VERSION)/install.sh | sh -s -- -b bin v$(GOLANGCI_LINT_VERSION); \
 	fi
 
+# 起票の reporter と、ワークフロー・Makefile・citest の間の名前の契約を確かめる。
+reporter-check:
+	node --test .github/scripts/report-flaky-tests.test.cjs
+
 test:
 	$(GO) test -shuffle=on -count=1 ./...
 
@@ -60,7 +68,12 @@ test:
 test-race-coverage:
 	@profile="$$(mktemp)" || exit $$?; \
 	trap 'rm -f "$$profile"' EXIT; \
-	$(GO) test -race -shuffle=on -count=1 -coverprofile="$$profile" ./... || exit $$?; \
+	if [ -n "$(CITEST)" ]; then \
+	  "$(CITEST)" -profile race-coverage -report-dir "$(CI_TEST_ARTIFACT_DIR)/race-coverage" -coverprofile "$$profile" -- \
+	    $(GO) test -race -shuffle=on -count=1 -coverprofile="$$profile" ./... || exit $$?; \
+	else \
+	  $(GO) test -race -shuffle=on -count=1 -coverprofile="$$profile" ./... || exit $$?; \
+	fi; \
 	GO="$(GO)" scripts/check-go-coverage.sh "$$profile" "$(GO_COVERAGE_MIN)" $(GO_COVERAGE_PACKAGES)
 
 # 表示が ldflags の埋め込みまで通っていることを確かめる。
@@ -111,7 +124,7 @@ ci:
 	$(MAKE) $(CI_MAKEFLAGS) ci-checks
 
 # どのチェックも読み取り専用か、自分の出力先（bin/ と一時ディレクトリ）にしか書かないので、並行して実行できる。
-ci-checks: version-check release-check install-test uninstall-test lint test-race-coverage mod-tidy-check
+ci-checks: version-check release-check install-test uninstall-test lint reporter-check test-race-coverage mod-tidy-check
 
 # 手元の総合確認。CI と同じ検査に互換スイートを足す。
 check: ci compat-test
