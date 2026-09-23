@@ -2,11 +2,23 @@
 // install が書くエントリと `hhx hook <name>` の振り分けは、どちらもこの一覧から作る。
 package registry
 
-import "github.com/HappyOnigiri/hhx/internal/hookrt"
+import (
+	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	"github.com/HappyOnigiri/hhx/internal/hooks/forbiddentermguard"
+	"github.com/HappyOnigiri/hhx/internal/hooks/githookspathguard"
+	"github.com/HappyOnigiri/hhx/internal/hooks/idlewaitguard"
+	"github.com/HappyOnigiri/hhx/internal/hooks/prmergeguard"
+)
 
 // definitions は hook を設定ファイルへ書く順に並べる。
 // 同じ CLI・イベント・matcher のエントリは 1 つのグループにまとまり、グループ内の順序もこの順になる。
-var definitions = []hookrt.Definition{}
+// 移行元の Python 実装を登録していた順に合わせ、移植した hook はその位置へ差し込む。
+var definitions = []hookrt.Definition{
+	prmergeguard.Definition(),
+	githookspathguard.Definition(),
+	forbiddentermguard.Definition(),
+	idlewaitguard.Definition(),
+}
 
 // All は登録済みの hook をすべて返す。
 func All() []hookrt.Definition {
