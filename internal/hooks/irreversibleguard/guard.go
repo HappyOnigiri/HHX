@@ -489,6 +489,9 @@ const (
 	registrationCore = `\.claude/settings[` + py.WordChars + `.]*\.json|\.codex/(?:hooks\.json|config\.toml)`
 	// guardPrefix は _PRE（トークンの直前に許す文字）である。
 	guardPrefix = `(?:^|[` + py.SpaceChars + `'"=(/>])`
+	// hhxPrefix は hhx の保護対象のトークンの直前に許す文字である。/ を含めないのは、/tmp/x/~/.config/hhx のような
+	// 別のパスの途中から一致させないためである。
+	hhxPrefix = `(?:^|[` + py.SpaceChars + `'"=(>])`
 	// hhxTerminator は hhx の保護対象の直後の 1 文字である。hhx.bak のような別名のファイルまで止めないために置く。
 	hhxTerminator = `(?:[^` + py.WordChars + `.\-]|$)`
 	// pathTail は保護対象のディレクトリの配下（移植元の hooks(?:/[^\s'"|;&]*)? と同じ形）である。
@@ -503,20 +506,27 @@ var (
 	guardSkip  = []string{"__pycache__", ".ruff_cache", ".pytest_cache", ".DS_Store"}
 )
 
-// hhxCores は hhx の保護対象を、トークンの末尾に一致させる正規表現の断片で返す。
-// ホームディレクトリの下にあるものは、ホームからの相対で書く。~/…・$HOME/…・絶対パスのどれで書いても一致させるためである。
+// hhxCores は hhx の保護対象を、トークン全体に一致させる正規表現の断片で返す。
+// 絶対パスに加え、ホームディレクトリの下にあるものは ~/…・$HOME/…・${HOME}/… の表記でも一致させる。
+// 末尾だけで照合しないのは、/tmp/project/.config/hhx のような別の場所にある同名のパスまで止めないためである。
 func hhxCores() []string {
 	home := strings.TrimRight(os.Getenv("HOME"), "/")
 	var cores []string
 	seen := map[string]bool{}
-	add := func(path, tail string) {
-		relative := strings.TrimPrefix(path, "/")
-		if home != "" && strings.HasPrefix(path, home+"/") {
-			relative = path[len(home)+1:]
-		}
-		if core := regexp.QuoteMeta(relative) + tail; relative != "" && !seen[core] {
+	appendCore := func(core string) {
+		if !seen[core] {
 			seen[core] = true
 			cores = append(cores, core)
+		}
+	}
+	add := func(path, tail string) {
+		if strings.Trim(path, "/") == "" {
+			return
+		}
+		appendCore(`/+` + regexp.QuoteMeta(strings.TrimLeft(path, "/")) + tail)
+		if home != "" && strings.HasPrefix(path, home+"/") {
+			relative := regexp.QuoteMeta(path[len(home)+1:]) + tail
+			appendCore(`(?:~|\$HOME|\$\{HOME\})/` + relative)
 		}
 	}
 	if path, err := executable(); err == nil && strings.HasPrefix(path, "/") {
@@ -531,14 +541,15 @@ func hhxCores() []string {
 	return cores
 }
 
-// guardPattern は `_PRE((?:\S*/)?GUARD_CORE)` を組み立てる。
-// 1 番目の括弧がトークンで、hhx の保護対象に一致したときは 2 番目の括弧がその終わり（直後の 1 文字を含めない）を示す。
+// guardPattern は、登録ファイルに一致する `_PRE((?:\S*/)?GUARD_CORE)` と、hhx の保護対象に一致する
+// `hhxPrefix(HHX_CORE)` + 終端の 1 文字、を並べて組み立てる。
+// 1 番目の括弧が登録ファイルのトークン、2 番目の括弧が hhx の保護対象のトークン（直後の 1 文字を含めない）である。
 func guardPattern() *regexp.Regexp {
-	core := registrationCore
+	pattern := guardPrefix + `((?:` + py.NotSpace + `*/)?(?:` + registrationCore + `))`
 	if cores := hhxCores(); len(cores) > 0 {
-		core += `|(?:` + strings.Join(cores, "|") + `)()` + hhxTerminator
+		pattern += `|` + hhxPrefix + `((?:` + strings.Join(cores, "|") + `))` + hhxTerminator
 	}
-	return regexp.MustCompile(guardPrefix + `((?:` + py.NotSpace + `*/)?(?:` + core + `))`)
+	return regexp.MustCompile(pattern)
 }
 
 // checkGuardFiles はガード（hhx・hook の登録）の削除・移動を探し、見つかれば対象の表記を返す。
@@ -553,11 +564,11 @@ func checkGuardFiles(normalized string) string {
 			pattern = guardPattern()
 		}
 		for _, match := range pattern.FindAllStringSubmatchIndex(segment, -1) {
-			end := match[3]
-			if match[4] >= 0 {
-				end = match[4]
+			start, end := match[2], match[3]
+			if start < 0 {
+				start, end = match[4], match[5]
 			}
-			token := segment[match[2]:end]
+			token := segment[start:end]
 			if !containsAny(token, guardSkip) {
 				return withToken(targetGuard, token)
 			}

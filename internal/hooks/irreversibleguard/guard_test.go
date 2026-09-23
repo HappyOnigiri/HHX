@@ -414,6 +414,8 @@ func TestGuardRemoval(t *testing.T) {
 		{Command: "rm -rf ~/.config/hhx", Label: labelGuard + " (~/.config/hhx)"},
 		{Command: "rm ~/.config/hhx/config.yaml", Label: labelGuard + " (~/.config/hhx/config.yaml)"},
 		{Command: "mv /Users/alice/.config/hhx /tmp/", Label: labelGuard},
+		{Command: "rm -rf ${HOME}/.config/hhx", Label: labelGuard + " (${HOME}/.config/hhx)"},
+		{Command: "rm -rf //Users/alice/.config/hhx", Label: labelGuard + " (//Users/alice/.config/hhx)"},
 		{Command: "rm ~/.codex/hooks.json", Label: labelGuard},
 		{Command: "rm ~/.codex/config.toml", Label: labelGuard},
 		{Command: "rm ~/.claude/settings.json", Label: labelGuard},
@@ -449,7 +451,7 @@ func TestGuardLegacyLocationsAreNotGuarded(t *testing.T) {
 	))
 }
 
-// 保護対象と名前が前方一致するだけのファイルと、編集・閲覧・キャッシュの掃除は通す。
+// 保護対象と名前が前方一致するだけのファイル、別の場所にある同名のパス、編集・閲覧・キャッシュの掃除は通す。
 func TestGuardLookalikesAndEditsPass(t *testing.T) {
 	check(t, "", hooktest.Commands(
 		"rm ~/.local/bin/hhx.bak",
@@ -457,6 +459,11 @@ func TestGuardLookalikesAndEditsPass(t *testing.T) {
 		"rm ~/.config/hhx.bak",
 		"rm -rf ~/.config/hhxfoo",
 		"rm -rf ~/.config/hhx/__pycache__",
+		"rm -rf /tmp/project/.config/hhx",
+		"rm -rf project/.config/hhx",
+		"rm /tmp/project/.local/bin/hhx",
+		"rm -rf /tmp/x/~/.config/hhx",
+		"rm -rf /tmp/Users/alice/.config/hhx",
 		"cp ~/.local/bin/hhx /tmp/hhx",
 		"vim ~/.config/hhx/config.yaml",
 		"cat ~/.config/hhx/config.yaml",
