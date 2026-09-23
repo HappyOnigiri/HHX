@@ -397,6 +397,7 @@ DISCARD_CHANGED_REASON = ("実行せず文字列として書きたいだけな�
 # hhx で意図して Python 実装から変えた、snapshot の対象の特定。どちらも Python 実装は別のリポジトリを保存して通し、
 # 本来の対象の変更を失う (データ消失) ので、1 対 1 よりデータを守ることを優先して直した (AGENTS.md の「hook の移植の型」)。
 #   - ( ... ) / $( ... ) の中の cd を閉じ括弧で取り消す。Python は括弧を空白として読み、閉じた後も cd を残す。
+#     hhx は括弧を無視した作業ディレクトリ (Python の意味) も候補に残し、両方を保存する。
 #   - 1 つの git の複数の -C を順に適用する。Python は最後の -C だけを cwd から解決する。
 # これに当たりうる入力 (cd の後に閉じ括弧がある、-C で始まるトークンが 2 つ以上ある) は判定が違ってよいので比べない。
 # 実際の判定は Go のテスト (TestResolveCdInsideSubshellDoesNotLeak・TestResolveMultipleDashCAreApplied など) で固定している。

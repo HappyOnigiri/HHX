@@ -94,7 +94,9 @@ and `git apply -R` / `--3way` / `--reject`.
 Before such a command runs, it commits the working tree, tracked and untracked files alike, to the reflog of `refs/hhx/discard-snapshot`.
 It leaves the working tree and the index untouched, and it saves nothing when the working tree matches `HEAD`.
 It follows literal `cd` and `git -C` to find the repository, and saves every repository the command discards in.
-A `cd` inside `( ... )` or `$( ... )` ends at the closing parenthesis, and several `-C` in one `git` call apply in order, as in Git.
+After a `cd` inside `( ... )` or `$( ... )`, it saves both the directory outside the parentheses and the `cd` target,
+because it counts parentheses without telling quoted ones or `case` patterns apart.
+Several `-C` in one `git` call apply in order, as in Git.
 
 The ref lives in the common Git directory, so all worktrees of a repository share it.
 Each entry's message ends with `@ <worktree>`, the top-level directory of the worktree it came from. To restore:

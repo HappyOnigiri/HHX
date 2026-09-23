@@ -328,6 +328,8 @@ func isDir(path string) bool {
 //
 // 次の 2 点は移植元の Python 実装から意図して変えている。どちらも移植元では別のリポジトリを保存して通し、本来の対象の変更を失っていた。
 //   - ( ... ) と $( ... ) はサブシェルなので、中の cd を閉じ括弧で取り消す。移植元は括弧を空白として読み、閉じた後も cd を残していた。
+//     ただし括弧はクォートや case の分岐を見分けずに数えるので、実際には閉じていない括弧で cd を取り消しうる。
+//     そこで括弧を無視した作業ディレクトリ（移植元の意味）も並行して辿り、両方を候補にする。移植元より保存先が減る入力は無い。
 //   - 1 つの git に -C が複数あれば、git と同じく出現順に適用し、相対パスは直前の -C の先から辿る。移植元は最後の -C だけを cwd から解決していた。
 func resolveTargetDirs(command, cwd string) ([]string, error) {
 	tokens, parens := tokenize(command)
@@ -344,7 +346,14 @@ func resolveTargetDirs(command, cwd string) ([]string, error) {
 	if !isDir(base) {
 		return nil, nil
 	}
+	// flat は括弧を無視して辿る作業ディレクトリである（閉じ括弧で cd を取り消さない）。
+	flat := base
 	var targets []string
+	add := func(target string) {
+		if !slices.Contains(targets, target) {
+			targets = append(targets, target)
+		}
+	}
 	// outer はサブシェルに入る前の作業ディレクトリを積む。対応の無い閉じ括弧（case の分岐など）は無視する。
 	var outer []string
 
@@ -392,11 +401,11 @@ func resolveTargetDirs(command, cwd string) ([]string, error) {
 				return nil, nil
 			}
 			path, _ := takeValue(tokens, index+1)
-			destination := resolve(base, path)
-			if destination == "" {
+			destination, flatDestination := resolve(base, path), resolve(flat, path)
+			if destination == "" || flatDestination == "" {
 				return nil, nil
 			}
-			base = destination
+			base, flat = destination, flatDestination
 		case isShell(token):
 			// 別のシェル経由（sh -c '...' / bash -lc '...'）は、中身をトークンとして追えない。
 			if strings.HasPrefix(next, "-") {
@@ -413,21 +422,22 @@ func resolveTargetDirs(command, cwd string) ([]string, error) {
 			if !slices.Contains(discardSubcommands, subcommand) {
 				continue
 			}
-			target := base
-			for _, directory := range directories {
-				if target = resolve(target, directory); target == "" {
-					return nil, nil
+			for _, start := range []string{base, flat} {
+				target := start
+				for _, directory := range directories {
+					if target = resolve(target, directory); target == "" {
+						return nil, nil
+					}
 				}
-			}
-			if !slices.Contains(targets, target) {
-				targets = append(targets, target)
+				add(target)
 			}
 		}
 	}
 	// 破棄系の git をトークンとして拾えなかった（クォートの中など）が、discardRules には当たっている。
 	// 多めに拾う方針なので、最後の作業ディレクトリを保存しておく。
 	if len(targets) == 0 {
-		return []string{base}, nil
+		add(base)
+		add(flat)
 	}
 	return targets, nil
 }
