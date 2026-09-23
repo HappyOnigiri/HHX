@@ -70,6 +70,15 @@ A missing or broken file never stops a hook: hooks fall back to their defaults.
 | `exit-plan-subagent-guard` | on (Claude Code only) | Leaving plan mode (`ExitPlanMode`) while an agent started in the background has not returned its result yet. It passes once the agent finishes or is stopped |
 | `git-hookspath-guard` | off | Changing `core.hooksPath`, and editing Git config files such as `.git/config` directly |
 
+The context hooks add text to the agent's context and never deny anything:
+
+| Hook | Default | Event | What it adds |
+| --- | --- | --- | --- |
+| `pr-context` | on | `UserPromptSubmit` | For each GitHub pull request URL in the prompt (up to 3, and up to 2 `#discussion_r` anchors each): its state, head and base, size, and whether a local clone has its head commit. It reminds the agent that the local files are not the pull request |
+| `push-ci-context` | on | `PostToolUse` (Bash) | After a successful `git push`, `gh pr create`, or `gh workflow run`: how to wait for CI with `hhx wait-ci --progress` (or `gh run watch` for a dispatched workflow), after finishing the remaining work of the turn |
+| `pr-body-staleness` | on | `PostToolUse` (Bash) | After a successful `git push`: the commits made after the pull request body was last edited, so the agent checks whether the body is out of date |
+| `agents-local-context` | on (Codex only) | `PreToolUse`, `SessionStart`, `SubagentStart` | The `AGENTS.local.md` files that apply to the paths a tool touches, from the Git root down, once per session. It re-injects them after compaction and for subagents |
+
 Messages shown to the agent are currently in Japanese.
 
 `git-hookspath-guard` is meant for setups that delegate from global Git hooks to repository hooks. Turn it on with:
@@ -79,6 +88,20 @@ hooks:
   git-hookspath-guard:
     enabled: true
 ```
+
+`pr-body-staleness` tells the agent to update the body with the `update-pr` skill.
+Replace that sentence with your own way of updating a pull request body:
+
+```yaml
+hooks:
+  pr-body-staleness:
+    update-instruction: "食い違いがあれば `gh pr edit --body-file` で本文を更新する。"
+```
+
+`pr-context` and `pr-body-staleness` call `gh` (it must be on `PATH` and signed in) and give up silently when it fails or takes more than 8 seconds.
+`pr-context` keeps a 90-second cache of what it fetched and a 24-hour record of what it injected in each session,
+and `agents-local-context` keeps a 30-day record of the rules it injected in each session.
+Both live under `$XDG_CACHE_HOME/hhx/` (`~/.cache/hhx/` by default); deleting them only makes the hooks inject again.
 
 `forbidden-term-guard` does nothing unless the repository has `forbidden-terms.txt` in its common Git directory.
 
@@ -146,6 +169,15 @@ which tells it to report to the user instead of trying another command.
 - Codex does not pass the working directory of each command to hooks, only the one the session started in, so it decides the target from that.
 - It treats a `cd` in a pipeline or in a background command (`cd dir | ...`, `cd dir & ...`) as if it changed the directory
   for the rest of the command, although the shell may run it in a subshell.
+
+The context hooks match text, too:
+
+- `pr-context` picks up a URL whenever `github.com` follows a separator, so it also reacts to `evil.com/github.com/o/r/pull/1`.
+- `pr-body-staleness` compares commit dates, which rebase, amend, and cherry-pick reset,
+  so it may ask the agent to check a body that is still correct. It misses old commits brought in later.
+- `push-ci-context` decides whether the push went to GitHub from the command output, and otherwise from the origin of the working directory.
+  Codex passes only the directory the session started in, so it injects the guidance whenever it cannot tell.
+- `agents-local-context` finds paths in commands on a best-effort basis: quoted text, heredocs, and variables can hide a path or look like one.
 
 `exit-plan-subagent-guard` reads only the session transcript:
 
