@@ -111,6 +111,7 @@ SCENARIOS = [
     ("interval below one", ["--interval", "0"], "branch", {}, 2, True),
     ("argument error", ["--interval", "abc"], "branch", {}, 2, False),
     ("extra positional", ["1", "2"], "branch", {}, 2, False),
+    ("missing sha value", ["--sha", "--progress"], "branch", {}, 2, False),
 ]
 
 # 秒数が実時間で揺れる行。結論行 (wait-ci: ...) と PR head: 行の「<数字>s」を正規化する。

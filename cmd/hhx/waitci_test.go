@@ -236,6 +236,11 @@ func TestWaitCITargetSHA(t *testing.T) {
 		{[]string{"--sha", "cafe"}, "cafe"},
 		{[]string{"--any-sha"}, ""},
 		{[]string{"--sha", "cafe", "--any-sha"}, ""},
+		// argparse が値として読む、- で始まる引数（= 付き、負の数、単独の -、空白を含むもの）。
+		{[]string{"213", "--sha=-x"}, "-x"},
+		{[]string{"213", "--sha", "-5"}, "-5"},
+		{[]string{"213", "--sha", "-"}, "-"},
+		{[]string{"213", "--sha", "-x y"}, "-x y"},
 	}
 	for _, tc := range cases {
 		fake := &fakeWaitCI{outcome: outcome(waitci.StatusComplete, passed)}
@@ -431,6 +436,11 @@ func TestWaitCIArgumentErrorsExitWithTwo(t *testing.T) {
 		{"--no-such-option"},
 		{"1", "2"},
 		{"--s", "x"},
+		// argparse と同じく、--sha の直後のオプションに見える引数を値に取らない。
+		{"--sha", "--progress"},
+		{"--sha", "-v"},
+		{"--sha", "--"},
+		{"--sh", "--any"},
 	} {
 		installFakeWaitCI(t, &fakeWaitCI{outcome: outcome(waitci.StatusComplete)})
 		code, stdout, stderr := runCommand(t, "", append([]string{"wait-ci"}, args...)...)

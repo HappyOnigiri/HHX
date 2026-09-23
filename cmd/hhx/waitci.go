@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -148,6 +149,29 @@ func expandAbbreviations(flags *pflag.FlagSet, args []string) ([]string, error) 
 	return expanded, nil
 }
 
+// argparseNegativeNumber は argparse が負の数とみなし、オプションではなく値として読む引数の形である。
+var argparseNegativeNumber = regexp.MustCompile(`^-\d+$|^-\d*\.\d+$`)
+
+// checkSHAValue は、`=` を付けない `--sha` の直後がオプションに見えるときにエラーを返す。
+// pflag は `-` で始まる次の引数もそのまま値に取るが、argparse は負の数と空白を含むものを除いて値に取らず、
+// 引数エラーにする。値の渡し忘れ（`--sha $SHA` の SHA が空）で、存在しない commit を待ち続けないようにする。
+func checkSHAValue(args []string) error {
+	for index, arg := range args {
+		if arg == "--" {
+			return nil
+		}
+		if arg != "--sha" || index+1 >= len(args) {
+			continue
+		}
+		next := args[index+1]
+		if len(next) > 1 && strings.HasPrefix(next, "-") && !argparseNegativeNumber.MatchString(next) &&
+			!strings.Contains(next, " ") {
+			return errors.New("argument --sha: expected one argument")
+		}
+	}
+	return nil
+}
+
 // parseWaitCIArgs は引数を読む。done が真なら code で終える（使い方を出した・引数が誤っている）。
 func parseWaitCIArgs(args []string, stdout, stderr io.Writer) (options waitCIOptions, code int, done bool) {
 	flags := newWaitCIFlags(&options)
@@ -157,6 +181,9 @@ func parseWaitCIArgs(args []string, stdout, stderr io.Writer) (options waitCIOpt
 	}
 	args, err := expandAbbreviations(flags, args)
 	if err != nil {
+		return fail(err)
+	}
+	if err := checkSHAValue(args); err != nil {
 		return fail(err)
 	}
 	if err := flags.Parse(args); err != nil {
