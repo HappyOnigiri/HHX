@@ -1,0 +1,77 @@
+name: CI
+
+# pull_request はベースを絞らない。積み重ねた PR（main 以外がベースの PR）も検査するためである。
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# 検査ごとに 1 ジョブにし、所要時間を合計ではなく最も遅い 1 つにする。
+# 各ジョブは Makefile のターゲットを 1 つ走らせ、検査の定義を Makefile に一本化する。
+#
+# Go のキャッシュはジョブごとの名前空間に分け、main か、復元できなかったときだけ保存する。
+# PR の実行は main の小さく温まったキャッシュを復元し、アップロードの時間を払わない。
+jobs:
+  check:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: go-lint
+            go: true
+            go-cache-extra-paths: |
+              ~/.cache/golangci-lint
+              bin/golangci-lint
+          - target: go-deadcode
+            go: true
+          - target: markdown-lint
+            go: true
+          - target: mod-tidy-check
+            go: true
+          - target: test-race-coverage
+            go: true
+          - target: release-check
+            go: true
+          # git describe がタグを読めるよう、このジョブだけ履歴とタグを取得する。
+          - target: version-check
+            go: true
+            full-history: true
+          - target: install-test
+          - target: uninstall-test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 数値の 0 は式の中で偽になるので、文字列で渡す。
+          fetch-depth: ${{ matrix.full-history && '0' || '1' }}
+          persist-credentials: false
+      - name: Set up Go
+        if: matrix.go
+        id: go
+        uses: ./.github/actions/setup-go
+        with:
+          cache-name: ${{ matrix.target }}
+          extra-cache-paths: ${{ matrix.go-cache-extra-paths }}
+      - run: make ${{ matrix.target }}
+      - name: Verify CI is read-only
+        run: |
+          git diff --exit-code || {
+            echo "::error::make ${{ matrix.target }} produced tracked file changes."
+            git diff --stat
+            exit 1
+          }
+      - name: Save Go caches
+        if: ${{ !cancelled() && matrix.go && (github.ref == 'refs/heads/main' || steps.go.outputs.cache-matched-key == '') }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.go.outputs.cache-path }}
+          key: ${{ steps.go.outputs.cache-key }}

@@ -1,0 +1,75 @@
+name: Set up Go
+description: >-
+  Installs the Go toolchain pinned in go.mod and restores the module and build caches that one job
+  produced earlier. Each job gets its own cache namespace so it downloads only what it needs.
+
+inputs:
+  cache-name:
+    description: Cache namespace, usually the make target the job runs.
+    required: true
+  extra-cache-paths:
+    description: Newline-separated paths to cache together with the Go module and build caches.
+    required: false
+    default: ""
+
+outputs:
+  cache-key:
+    description: Primary cache key. Pass it to actions/cache/save to publish the caches of this job.
+    value: ${{ steps.cache-key.outputs.key }}
+  cache-path:
+    description: Newline-separated cached paths for actions/cache/save.
+    value: ${{ steps.cache-key.outputs.path }}
+  cache-matched-key:
+    description: Key of the restored cache, or empty when no cache could be restored.
+    value: ${{ steps.restore.outputs.cache-matched-key }}
+
+runs:
+  using: composite
+  steps:
+    # actions/setup-go spends 6-11 s copying the extracted toolchain into the runner tool cache and
+    # restores one ~1 GB cache shared by every job. Extracting the official archive takes ~4 s, and
+    # the per-job caches below restore in a fraction of the time.
+    - name: Install the Go toolchain from go.mod
+      shell: bash
+      run: |
+        version="$(awk '$1 == "go" { print $2 }' go.mod)"
+        case "$(uname -m)" in
+          x86_64) arch=amd64 ;;
+          aarch64) arch=arm64 ;;
+          *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+        esac
+        # go.dev/dl redirects archives here; its .sha256 URLs redirect to the download page instead.
+        archive="go${version}.linux-${arch}.tar.gz"
+        cd "$RUNNER_TEMP"
+        curl -fsSLO "https://dl.google.com/go/${archive}"
+        echo "$(curl -fsSL "https://dl.google.com/go/${archive}.sha256")  ${archive}" | sha256sum -c -
+        tar -xzf "$archive"
+        echo "$RUNNER_TEMP/go/bin" >>"$GITHUB_PATH"
+        echo "GOTOOLCHAIN=local" >>"$GITHUB_ENV"
+
+    - id: cache-key
+      shell: bash
+      env:
+        CACHE_NAME: ${{ inputs.cache-name }}
+        EXTRA_PATHS: ${{ inputs.extra-cache-paths }}
+        GO_SUM_HASH: ${{ hashFiles('go.sum') }}
+      run: |
+        go version
+        {
+          echo "key=go-${CACHE_NAME}-${RUNNER_OS}-${GO_SUM_HASH}-${GITHUB_SHA}"
+          echo "path<<EOF"
+          go env GOMODCACHE GOCACHE
+          if [ -n "$EXTRA_PATHS" ]; then printf '%s\n' "$EXTRA_PATHS"; fi
+          echo "EOF"
+        } >>"$GITHUB_OUTPUT"
+
+    # The key ends with the commit SHA, so it never matches exactly and the newest cache saved from
+    # main (or, for a new dependency set, the newest cache of this job) is restored instead.
+    - id: restore
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.cache-key.outputs.path }}
+        key: ${{ steps.cache-key.outputs.key }}
+        restore-keys: |
+          go-${{ inputs.cache-name }}-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+          go-${{ inputs.cache-name }}-${{ runner.os }}-

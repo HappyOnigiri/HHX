@@ -371,24 +371,24 @@ func TestClaudeIgnoresLocalSettings(t *testing.T) {
 
 func TestInstallWritesThroughSymlink(t *testing.T) {
 	options := testOptions(t)
-	real := filepath.Join(options.Home, "dotfiles", "settings.json")
-	writeFile(t, real, "{\n    \"model\": \"opus\"\n}\n")
+	target := filepath.Join(options.Home, "dotfiles", "settings.json")
+	writeFile(t, target, "{\n    \"model\": \"opus\"\n}\n")
 	link := filepath.Join(options.Home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
 	result := mustInstall(t, options, hookrt.Claude, testDefinitions())
-	if resolved, _ := filepath.EvalSymlinks(real); result.Resolved != resolved {
+	if resolved, _ := filepath.EvalSymlinks(target); result.Resolved != resolved {
 		t.Fatalf("Resolved=%s, want %s", result.Resolved, resolved)
 	}
 	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatal("the symlink must survive the install")
 	}
-	if !strings.HasPrefix(readFile(t, real), "{\n    \"model\": \"opus\",\n    \"hooks\"") {
-		t.Fatalf("the original indentation must be kept:\n%s", readFile(t, real))
+	if !strings.HasPrefix(readFile(t, target), "{\n    \"model\": \"opus\",\n    \"hooks\"") {
+		t.Fatalf("the original indentation must be kept:\n%s", readFile(t, target))
 	}
 }
 

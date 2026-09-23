@@ -1,0 +1,19 @@
+name: Release Reminder
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: [main]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  remind:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: HappyOnigiri/ReleaseActions/actions/release-reminder@629b3cc65926d0ce0d2a08ca9dbd09ad2cc37855
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
