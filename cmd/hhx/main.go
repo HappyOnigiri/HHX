@@ -18,6 +18,8 @@ const usage = `Usage:
                             Register hhx hooks in the agent settings
   hhx uninstall [--agent claude|codex]...
                             Remove hhx hooks from the agent settings
+  hhx wait-ci [reference] [options]
+                            Report the CI result of a pull request once every check has finished
   hhx update [--apply]      Check GitHub Releases for a newer hhx (and install it)
   hhx version               Print the version
 `
@@ -38,6 +40,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runInstall(args[1:], stdout, stderr)
 	case "uninstall":
 		return runUninstall(args[1:], stdout, stderr)
+	case "wait-ci":
+		return runWaitCI(args[1:], stdout, stderr)
 	case "update":
 		return runUpdate(args[1:], stdout, stderr)
 	case "-v", "--version", "version":

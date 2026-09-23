@@ -28,6 +28,8 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `internal/install`: Claude の settings.json と Codex の hooks.json の読み書き
 - `internal/config`: `~/.config/hhx/config.yaml` の読み込み
 - `internal/update`: GitHub Releases の確認と、Release 添付の `install.sh` による更新（`hhx update`）
+- `internal/waitci`: `hhx wait-ci`（PR の CI の完了を 1 回だけ報告する）の判定の本体。引数の解析と出力は `cmd/hhx/waitci.go` が持つ。
+  hook ではないので hook の実行時の保護（fail-open）を通さない。1 行目の結論・最終行の `wait-ci: exit=...`・終了コードは読み手との契約なので変えない。
 - `scripts/`: 配布物のビルド、インストーラーとアンインストーラー、それらのテスト
 - `.github/workflows/`: CI とリリース（[docs/release.md](docs/release.md)）、flaky なテストの起票（`report-flaky-tests.yml`）
 - `.github/scripts/`: flaky なテストの issue を起票する reporter（`actions/github-script` から呼ぶ）
@@ -64,6 +66,8 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
     hhx に切り替えた後は Python 実装は動かないので、移植元に合わせて残す理由が無い。
     直した点はコードのコメントに移植元との違いとして書き、`compat/test_differential.py` では該当する入力を比較から外して、外す理由を書く。
     今ある例は discard-guard の 2 点（`( ... )` の中の cd を閉じ括弧で取り消す、1 つの git の複数の `-C` を順に適用する）。
+    前者は、閉じ括弧で取り消した cwd に加え、括弧を無視して辿った cwd も保存する（どちらかが解決できなければ deny）。
+    括弧の数え方はクォートや `case` のパターンを区別しないので、取り消しが誤っていても実際の破棄先を落とさないためである。
   - 一次ゲートのキーワードは変えない。「ゲートで抜ける＝判定しない」こともテストで固定されている。
     開錠の環境変数のように stdin の中身を見ずに抜ける条件も `Gate` に置く。
   - argv のデバッグ経路（`Context.FromArgs`）での引数の解釈は、移植元の hook ごとの扱いに合わせる。

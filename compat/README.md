@@ -2,6 +2,7 @@
 
 Python 実装の agent hook のテストを複製し、
 同じ L1（契約）と L3（結合）のテストを `hhx hook <name>` に向けて流すための仕組み。
+`hhx wait-ci` も、Python 実装の `wait-ci` と同じシナリオで比べる（下の「wait-ci」）。
 移行期間だけ置き、Python 実装からの切り替えが済んだら削除する。恒久的なテストは Go で書く。
 
 ## 実行
@@ -18,6 +19,7 @@ HHX_COMPAT_TARGET=python HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレク�
 | `HHX_COMPAT_TARGET` | `hhx`（既定）か `python` |
 | `HHX_BIN` | 対象の hhx。既定は `bin/hhx` |
 | `HHX_COMPAT_PYTHON_HOOKS` | `python` のときに起動する Python 本体のディレクトリ |
+| `HHX_COMPAT_PYTHON_WAIT_CI` | Python 実装の `wait-ci`。渡すと wait-ci の差分テストが流れる。`python` では、渡さなければ wait-ci のテストを skip する |
 
 対象が `hhx` で `HHX_COMPAT_PYTHON_HOOKS` を渡したときは、差分テスト（`test_differential.py`）も流れる。
 同じ入力を Python 本体（プロセス内で `main` を呼ぶ）と `hhx hook <name>` の両方に通し、判定と理由文
@@ -27,12 +29,32 @@ Unicode の空白や語の文字など）を差し込んだ変形である。`HH
 意図して仕様を変えた入力（irreversible-guard の G 類の旧保護対象と hhx 自身のパス）は比べない。
 discard-guard は、Python 本体（worktree-guard.py）のブランチ attach の判定を無効にして比べ、理由文で意図して変えた 1 文は置き換えてから比べる。
 snapshot の対象の特定で意図して変えた 2 点（`( ... )` の中の cd を閉じ括弧で取り消す、1 つの git の複数の `-C` を順に適用する）に
-当たりうる入力も比べない。Python 本体は別のリポジトリを保存して通すので、データを守ることを優先して直した（AGENTS.md の「hook の移植の型」）。
+当たりうる入力も比べない。前者は、閉じ括弧で取り消した cwd に加え、括弧を無視して辿った cwd も保存する（どちらかが解決できなければ deny）。
+Python 本体は別のリポジトリを保存して通すので、データを守ることを優先して直した（AGENTS.md の「hook の移植の型」）。
 snapshot は両方が本物の git でサンドボックスのリポジトリに作るので、同じ一時 index の lock で競合しないよう hhx も 1 件ずつ起動する。
 
 ```sh
 HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレクトリ> make compat-test
 ```
+
+### wait-ci
+
+`test_wait_ci.py` は、偽の gh（`fake_gh_scenario.py`）と本物の git で組んだシナリオを `hhx wait-ci` に流し、
+終了コードと出力の形（1 行目の結論・最終行の `wait-ci: exit=...`・`--progress` が無ければ stderr が空）を確かめる。
+`HHX_COMPAT_PYTHON_WAIT_CI` に Python 実装の `wait-ci` を渡すと、同じシナリオを両方に流して、終了コード・stdout・gh の呼び出しを比べる。
+poll の回数が実時間で揺れないシナリオでは、進捗（stderr）も比べる。
+移植元のテストはモジュールを import して内部関数を差し替える形なので、hhx に向けてそのまま流せず、この差分テストで代える
+（ケースは Go のテストへ移した）。
+
+```sh
+HHX_COMPAT_PYTHON_WAIT_CI=<Python 実装の wait-ci> make compat-test
+```
+
+比べる前に次を正規化する。
+
+- 結論行と `PR head:` 行の秒数。シナリオは `--interval 1` などの短い値で実時間を待つので揺れる。
+- gh の出力が JSON として読めないときの理由。Python の json と Go の encoding/json でエラーの文言が違う。
+- 引数の解析の失敗は stderr を比べない。argparse と pflag で文言が違う。どちらも stdout は空で終了コードは 2。
 
 対象が `hhx` のとき、`helpers.py` は `HHX_CONFIG` を一時的な設定ファイルへ固定し、手元の `~/.config/hhx/config.yaml` を読ませない。
 その設定ファイルは、既定で無効な hook（`helpers.DEFAULT_OFF_HOOKS`）だけを有効にする。

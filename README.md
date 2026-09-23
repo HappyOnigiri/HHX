@@ -155,6 +155,34 @@ which tells it to report to the user instead of trying another command.
 - It tracks only background agents started by the main session, not agents run in the foreground or started by subagents.
 - It passes when the transcript is missing or cannot be read.
 
+## Waiting for CI
+
+`hhx wait-ci` waits until every check of a pull request has finished and reports the result once,
+so an agent can wait for CI after a push without reading a stream of per-job updates.
+
+```sh
+hhx wait-ci --progress         # the pull request of the current branch (or of HEAD when it is detached)
+hhx wait-ci 123 --all-checks   # a PR number, branch, or URL; list passing checks too
+```
+
+The first line of the output is the verdict and the last line is `wait-ci: exit=<code> failed=<n> total=<n>`,
+so either end of a truncated output still tells the result. Everything goes to stdout except `--progress` lines, which go to stderr.
+By default only failed checks are listed.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Every check passed, the branch has no pull request, or the repository has no CI |
+| 1 | Some checks failed |
+| 2 | Invalid arguments |
+| 3 | Timed out (the pushed commit never became the PR head, no check appeared, or the checks did not finish) |
+| 4 | `gh` kept failing |
+| 5 | The pull request conflicts with its base, so no check starts |
+
+It calls `gh` and `git`, so both must be on `PATH` and `gh` must be signed in.
+Without a reference it first waits for `HEAD` to become the PR head, so it does not report the checks of the previous push.
+It also waits until the set of finished checks stays the same for `--settle` seconds, to catch workflows that start after others.
+Run `hhx wait-ci --help` for the time limits.
+
 ## License
 
 MIT
