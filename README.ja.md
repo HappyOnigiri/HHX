@@ -40,14 +40,7 @@ hhx install
 
 インストーラーは `hhx` を `~/.local/bin` に置きます。`hhx install` は設定済みのエージェントに hook を登録します。ソースからビルドする場合は、`hhx install` の前に `make install` を実行します。
 
-## 使い方
-
-CI を待つには、次のコマンドを使います。
-
-```sh
-hhx wait-ci --progress       # 現在の PR を待つ
-hhx wait-ci 123 --progress   # 指定した PR を待つ
-```
+## 更新
 
 新しい版の確認は `hhx update`、適用は `hhx update --apply` で行います。hook の実行中に更新を確認することはありません。
 
@@ -73,7 +66,3 @@ hooks:
 ```sh
 curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/uninstall.sh | bash
 ```
-
-## ライセンス
-
-[MIT](LICENSE)
