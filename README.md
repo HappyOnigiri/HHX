@@ -38,7 +38,8 @@ curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/i
 hhx install
 ```
 
-The installer puts `hhx` in `~/.local/bin`; `hhx install` registers its hooks with the agents already configured on your machine. To build from source, run `make install` before `hhx install`.
+The installer puts `hhx` in `~/.local/bin`; `hhx install` registers its hooks with the agents already configured on your
+machine. To build from source, run `make install` before `hhx install`.
 
 ## Usage
 
@@ -66,7 +67,8 @@ Changes take effect without reinstalling. See [forbidden-term-guard setup](docs/
 
 ## Contributing
 
-Contributions are welcome. Share bugs and ideas in [Issues](https://github.com/HappyOnigiri/HappyHooks/issues), or send a [pull request](https://github.com/HappyOnigiri/HappyHooks/pulls). Documentation and translations are welcome too.
+Contributions are welcome. Share bugs and ideas in [Issues](https://github.com/HappyOnigiri/HappyHooks/issues), or send
+a [pull request](https://github.com/HappyOnigiri/HappyHooks/pulls). Documentation and translations are welcome too.
 
 ## Uninstall
 
