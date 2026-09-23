@@ -39,15 +39,6 @@ hhx update --apply  # installs it with the installer of that release
 Happy Hooks checks for updates only when you run `hhx update`; hooks never access the network for it.
 Development builds (`make install`) do not update themselves.
 
-## Uninstall
-
-```sh
-curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/uninstall.sh | bash
-```
-
-It runs `hhx uninstall` and then removes `~/.local/bin/hhx`.
-Configuration and caches are kept; the script prints their locations.
-
 ## Configuration
 
 `~/.config/hhx/config.yaml` (override with `HHX_CONFIG`) chooses the display language, turns hooks on or off, and holds hook-specific settings:
@@ -225,6 +216,15 @@ It calls `gh` and `git`, so both must be on `PATH` and `gh` must be signed in.
 Without a reference it first waits for `HEAD` to become the PR head, so it does not report the checks of the previous push.
 It also waits until the set of finished checks stays the same for `--settle` seconds, to catch workflows that start after others.
 Run `hhx wait-ci --help` for the time limits.
+
+## Uninstall
+
+```sh
+curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/uninstall.sh | bash
+```
+
+It runs `hhx uninstall` and then removes `~/.local/bin/hhx`.
+Configuration and caches are kept; the script prints their locations.
 
 ## License
 

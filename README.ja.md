@@ -39,15 +39,6 @@ hhx update --apply  # その版のインストーラーで入れる
 更新を確かめるのは `hhx update` を実行したときだけです。hook がそのためにネットワークへ出ることはありません。
 開発ビルド（`make install`）は自分では更新しません。
 
-## アンインストール
-
-```sh
-curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/uninstall.sh | bash
-```
-
-`hhx uninstall` を実行してから `~/.local/bin/hhx` を消します。
-設定とキャッシュは残し、その場所を表示します。
-
 ## 設定
 
 `~/.config/hhx/config.yaml`（`HHX_CONFIG` で差し替えられます）で、表示言語を選び、hook の有効・無効と hook 固有の設定を持たせます。
@@ -225,6 +216,15 @@ hhx wait-ci 123 --all-checks   # PR の番号・ブランチ・URL。成功し�
 reference を省くと、まず `HEAD` が PR の head になるまで待つので、前の push の check を報告しません。
 他より遅れて始まる workflow を拾うため、終わった check の集合が `--settle` 秒変わらないことも待ちます。
 時間の上限は `hhx wait-ci --help` で確かめてください。
+
+## アンインストール
+
+```sh
+curl -fsSL https://github.com/HappyOnigiri/HappyHooks/releases/latest/download/uninstall.sh | bash
+```
+
+`hhx uninstall` を実行してから `~/.local/bin/hhx` を消します。
+設定とキャッシュは残し、その場所を表示します。
 
 ## ライセンス
 
