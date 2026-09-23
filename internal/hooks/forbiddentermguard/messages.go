@@ -28,3 +28,18 @@ func reason(findings []string, termsPath string) string {
 	return "❌ ブロック: 禁止語を含む本文の送信\n\n該当箇所:\n" + detail + "\n\n" +
 		"理由: " + why + " (語リスト: " + termsPath + ")\n\n対応: " + how
 }
+
+// invalidHow は、語リストにコンパイルできない re: の行があるときの対応である。
+const invalidHow = "語リストの該当行を hhx で使える構文（docs/forbidden-terms.md）に直すよう、" +
+	"ユーザーに依頼してください。語リストの編集・削除や、別コマンドでの迂回はしないでください。"
+
+// invalidReason は、語リストにコンパイルできない re: の行があって検査できないときの理由文を組み立てる。
+func invalidReason(lines []int, termsPath string) string {
+	numbers := make([]string, len(lines))
+	for index, line := range lines {
+		numbers[index] = strconv.Itoa(line)
+	}
+	return "❌ ブロック: 禁止語を検査できない本文の送信\n\n" +
+		"理由: 禁止語リストの re: の行に、hhx の正規表現（RE2）で使えない構文があり、その語を検査できません。" +
+		" (語リスト: " + termsPath + " の " + strings.Join(numbers, "・") + " 行目)\n\n対応: " + invalidHow
+}

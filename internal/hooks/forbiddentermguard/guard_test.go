@@ -211,7 +211,7 @@ func TestOptIn(t *testing.T) {
 }
 
 func TestParseTerms(t *testing.T) {
-	terms := parseTerms("# comment\r\n\r\n  " + term + "  \rre:  foo\\d+bar \nre:(?<=x)y\nre:[unclosed\nRe:literal\n")
+	terms, invalid := parseTerms("# comment\r\n\r\n  " + term + "  \rre:  foo\\d+bar \nre:(?<=x)y\nre:[unclosed\nRe:literal\n")
 	for text, want := range map[string]bool{
 		strings.ToUpper(term): true,
 		"FOO12BAR":            true,
@@ -228,9 +228,31 @@ func TestParseTerms(t *testing.T) {
 			t.Errorf("matchesAny(%q)=%v, want %v", text, got, want)
 		}
 	}
-	// コンパイルできない re: は飛ばし、ほかの語の検査を続ける。
+	// コンパイルできない re: は語に含めず、行番号を返す。
 	if len(terms) != 3 {
 		t.Errorf("got %d terms, want 3", len(terms))
+	}
+	if len(invalid) != 2 || invalid[0] != 5 || invalid[1] != 6 {
+		t.Errorf("invalid lines=%v, want [5 6]", invalid)
+	}
+}
+
+// コンパイルできない re: の行があれば、ほかの語に該当しなくても対象のコマンドを拒否する。
+func TestInvalidRegexpDenies(t *testing.T) {
+	repo := newRepo(t, term, "re:(?<!x)lookbehind")
+	got := runIn(t, repo, `gh pr create --body "clean"`)
+	if got.Decision != hooktest.Deny {
+		t.Fatalf("invalid pattern must deny: %+v", got)
+	}
+	termsPath := filepath.Join(repo, ".git", termsFileName)
+	for _, part := range []string{"❌ ブロック: 禁止語を検査できない本文の送信", "(語リスト: " + termsPath + " の 2 行目)", "対応: " + invalidHow} {
+		if !strings.Contains(got.Reason, part) {
+			t.Errorf("reason %q does not contain %q", got.Reason, part)
+		}
+	}
+	// 対象外のコマンドは語リストを読まない。
+	if got := runIn(t, repo, `git commit -m "clean"`); got.Decision != "" {
+		t.Errorf("non-target command: %+v", got)
 	}
 }
 

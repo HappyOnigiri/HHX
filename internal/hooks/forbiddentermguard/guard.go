@@ -73,7 +73,12 @@ func run(c *hookrt.Context) error {
 		// このリポジトリは対象外である。
 		return nil
 	}
-	terms := loadTerms(termsPath)
+	terms, invalid := loadTerms(termsPath)
+	if len(invalid) > 0 {
+		// 検査できない語があるまま送ると、その語が公開先へ出てしまう。
+		c.Deny(invalidReason(invalid, termsPath))
+		return nil
+	}
 	if len(terms) == 0 {
 		return nil
 	}
@@ -245,11 +250,11 @@ func isFile(path string) bool {
 type termPattern = *regexp.Regexp
 
 // loadTerms は語リストを読む。書式は docs/forbidden-terms.md にある。読めなければ空を返す。
-// コンパイルできない re: のパターンは黙って飛ばし、ほかの語の検査を続ける。
-func loadTerms(path string) []termPattern {
+// invalid はコンパイルできない re: の行の行番号である。
+func loadTerms(path string) (terms []termPattern, invalid []int) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	return parseTerms(string(data))
 }
@@ -258,9 +263,9 @@ func loadTerms(path string) []termPattern {
 var newlineRE = regexp.MustCompile(`\r\n|\r|\n`)
 
 // parseTerms は語リストの中身を解釈する。
-func parseTerms(text string) []termPattern {
-	var terms []termPattern
-	for _, raw := range newlineRE.Split(strings.ToValidUTF8(text, "�"), -1) {
+// RE2 でコンパイルできない re: の行（Python の re では書ける後読みなど）は、1 始まりの行番号を invalid に返す。
+func parseTerms(text string) (terms []termPattern, invalid []int) {
+	for index, raw := range newlineRE.Split(strings.ToValidUTF8(text, "�"), -1) {
 		line := py.Strip(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -272,6 +277,7 @@ func parseTerms(text string) []termPattern {
 			}
 			pattern, err := regexp.Compile("(?i)" + expression)
 			if err != nil {
+				invalid = append(invalid, index+1)
 				continue
 			}
 			terms = append(terms, pattern)
@@ -279,7 +285,7 @@ func parseTerms(text string) []termPattern {
 		}
 		terms = append(terms, regexp.MustCompile("(?i)"+regexp.QuoteMeta(line)))
 	}
-	return terms
+	return terms, invalid
 }
 
 // matchesAny は text が語のどれかを含むかを返す。
