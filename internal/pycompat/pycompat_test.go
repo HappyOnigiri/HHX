@@ -81,6 +81,31 @@ func TestFieldsAndStrip(t *testing.T) {
 	}
 }
 
+func TestIsWordAndLStrip(t *testing.T) {
+	for r, want := range map[rune]bool{'a': true, '_': true, 'é': true, '١': true, '²': true, '日': true, '-': false, ' ': false} {
+		if got := IsWord(r); got != want {
+			t.Errorf("IsWord(%q)=%v, want %v", r, got, want)
+		}
+	}
+	if got := LStrip("\x1f　 a b \u0085"); got != "a b \u0085" {
+		t.Errorf("LStrip=%q", got)
+	}
+}
+
+// 期待値は Python 3.14 の str.lower() で確かめたものである。
+func TestLower(t *testing.T) {
+	for text, want := range map[string]string{
+		"ABC/Def": "abc/def", "İ": "i\u0307", "/TMP/İX": "/tmp/i\u0307x",
+		// Σ は前に大文字小文字のある文字があり、後ろに無いときだけ語末の ς になる。
+		"Σ": "σ", "AΣ": "aς", "AΣB": "aσb", "AΣ/B": "aς/b", "AΣ.B": "aσ.b", "A.Σ": "a.ς", "İΣ": "i\u0307ς",
+		"AΣ'": "aς'", "1Σ": "1σ",
+	} {
+		if got := Lower(text); got != want {
+			t.Errorf("Lower(%q)=%q, want %q", text, got, want)
+		}
+	}
+}
+
 func TestSplitLines(t *testing.T) {
 	for text, want := range map[string][]string{
 		"":               nil,
