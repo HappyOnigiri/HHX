@@ -28,10 +28,20 @@ const SpaceExceptNewline = `[` + spaceCharsExceptNewline + `]`
 // Digit は Python の \d（Unicode の Nd）にあたる文字クラスである。
 const Digit = `\p{Nd}`
 
+// Word は Python の \w、NotWord は \W にあたる文字クラスである。
+// Python の \w は str.isalnum() の文字と _ で、Go の \w と \b は ASCII の英数字と _ しか語の文字とみなさない。
+const (
+	Word    = `[\p{L}\p{N}_]`
+	NotWord = `[^\p{L}\p{N}_]`
+)
+
 // NotWordOrEnd は Python の \w の直後に置いた \b と同じ位置で一致する。
-// Python の \w は str.isalnum() の文字と _ で、Go の \b は ASCII の英数字しか語の文字とみなさない。
 // 1 文字を消費するので、後ろに続くパターンが無いときにだけ使う。
-const NotWordOrEnd = `(?:[^\p{L}\p{N}_]|$)`
+const NotWordOrEnd = `(?:` + NotWord + `|$)`
+
+// NotWordOrStart は Python の \w の直前に置いた \b と同じ位置で一致する。
+// 直前の 1 文字を消費するので、前に続くパターンが無いときにだけ使う。
+const NotWordOrStart = `(?:^|` + NotWord + `)`
 
 // IsSpace は Python の str.isspace() と同じ判定を 1 文字に対して行う。
 func IsSpace(r rune) bool {

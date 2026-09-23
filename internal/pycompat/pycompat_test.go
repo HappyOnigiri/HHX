@@ -51,6 +51,22 @@ func TestDigitAndWordBoundary(t *testing.T) {
 			t.Errorf("NotWordOrEnd after %q: %v, want %v", text, got, want)
 		}
 	}
+	leading := regexp.MustCompile(NotWordOrStart + `api`)
+	for text, want := range map[string]bool{"api": true, "x api": true, "x/api": true, "xapi": false, "_api": false, "éapi": false, "١api": false} {
+		if got := leading.MatchString(text); got != want {
+			t.Errorf("NotWordOrStart before %q: %v, want %v", text, got, want)
+		}
+	}
+	word := regexp.MustCompile(`^` + Word + `$`)
+	notWord := regexp.MustCompile(`^` + NotWord + `$`)
+	for text, want := range map[string]bool{"a": true, "_": true, "é": true, "١": true, "²": true, "日": true, "-": false, " ": false, "/": false} {
+		if got := word.MatchString(text); got != want {
+			t.Errorf("Word matches %q: %v, want %v", text, got, want)
+		}
+		if got := notWord.MatchString(text); got == want {
+			t.Errorf("NotWord matches %q: %v", text, got)
+		}
+	}
 }
 
 func TestFieldsAndStrip(t *testing.T) {

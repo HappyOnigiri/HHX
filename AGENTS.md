@@ -65,7 +65,9 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
   - argv のデバッグ経路（`Context.FromArgs`）での引数の解釈は、移植元の hook ごとの扱いに合わせる。
   - Python で例外になって無出力で終わっていた入力（文字列でない `command` など）は、無出力にする。
 - 正規表現と文字列処理の違いで判定がずれやすい。
-  - `\s`・`\S`・`\d`・語の直後の `\b`、`str.split()`・`strip()`・`splitlines()` は `internal/pycompat` を使う。Go の `\s` や `strings.Fields` は範囲が違う。
+  - `\s`・`\S`・`\d`・`\w`・`\W`・`\b`、`str.split()`・`strip()`・`splitlines()` は `internal/pycompat` を使う。Go の `\s`・`\w`・`\b` や `strings.Fields` は範囲が違う。
+    `\b` の部品（`NotWordOrEnd`・`NotWordOrStart`）は 1 文字を消費するので、パターンの末尾か先頭にだけ置く。
+    途中の `\b` は先読みと同じく同じ意味の形に展開し、展開の根拠をコメントに残す。
   - Python の `$` は末尾の改行の直前にも一致する。入力に改行が残るパターンは `\n?$` にし、改行つきのケースをテストに足す。
   - RE2 は先読み・後読みを扱えない。同じ意味の形に展開し、展開の根拠をコメントに残す。
   - 理由文に入力を JSON 文字列として埋め込むときは `pycompat.QuoteJSON` を使う（`encoding/json` は `<>&` と U+2028 をエスケープする）。
