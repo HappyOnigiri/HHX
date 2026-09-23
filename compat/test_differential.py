@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Python 実装と hhx の差分テスト (irreversible-guard・dangerous-rm-guard・discard-guard・exit-plan-subagent-guard)。
+"""Python 実装と hhx の差分テスト。
+
+対象は irreversible-guard・dangerous-rm-guard・discard-guard・exit-plan-subagent-guard・push-ci-context・pr-body-staleness・
+pr-context・agents-local-context。
 
 実行: HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレクトリ> make compat-test（compat/README.md を参照）
 
@@ -742,6 +745,474 @@ class ExitPlanDifferentialTest(unittest.TestCase):
         compare(self, "exit-plan-subagent-guard (payload)", unique(raws),
                 lambda raw: run_python(self.module, lambda text: "ExitPlanMode" in text, raw=raw),
                 lambda raw: run_hhx(self.NAME, raw=raw))
+
+
+def run_python_stdout(module, gate, raw=None, argv=None):
+    """Python 本体をプロセス内で起動し、stdout をそのまま返す (注入系の hook 用)。本体の例外は無出力として扱う。"""
+    text = argv if argv is not None else raw
+    if not gate(text):
+        return ""
+    saved = sys.argv, module.RAW
+    sys.argv = ["hook"] if argv is None else ["hook", argv]
+    module.RAW = text
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            module.main()
+    except SystemExit:
+        pass
+    except Exception:  # noqa: BLE001  本体の例外は hook の失敗で、agent には無出力と同じに見える
+        return ""
+    finally:
+        sys.argv, module.RAW = saved
+    return out.getvalue()
+
+
+def run_hhx_stdout(name, raw=None, argv=None, cwd=None):
+    command = hook_command_for_name(name) + ([] if argv is None else [argv])
+    proc = subprocess.run(command, input="" if raw is None else raw, capture_output=True, text=True,
+                          encoding="utf-8", timeout=120, cwd=cwd or os.getcwd())
+    if proc.returncode != 0:
+        raise AssertionError(f"hhx が 0 以外で終了しました (rc={proc.returncode}): {proc.stderr!r}")
+    return proc.stdout
+
+
+def injection(stdout):
+    """注入系の出力を比べられる形にする。JSON なら読んだ値、平文ならそのまま。"""
+    if not stdout.strip():
+        return None
+    try:
+        return json.loads(stdout)
+    except ValueError:
+        return stdout
+
+
+PUSH_BASE_COMMANDS = (
+    "git push", "git push origin HEAD", "git push --force-with-lease origin feature",
+    "git push origin 61c6a6b:refs/heads/feature", "git -C /other/worktree push origin HEAD", "/usr/bin/git push",
+    "make build && git push", "git commit -m 'x'; git push", "gh pr create --fill", "gh pr create --draft --title x --body y",
+    "gh workflow run deploy.yml", "gh workflow run deploy.yml --ref main -f target=staging",
+    "gh workflow run deploy.yml -f 'message=a;b'", "/usr/local/bin/gh workflow run deploy.yml -R owner/repo",
+    "gh workflow   run deploy.yml", "git push --dry-run origin HEAD", "git push -n origin HEAD",
+    "git push origin --delete feature", "git push origin :feature", "git status", "git fetch origin", "gh pr view 155",
+    "gh workflow run --help", "gh workflow view deploy.yml", "gh run list --workflow deploy.yml",
+    "echo 'gh workflow run deploy.yml'", "rg 'gh workflow run' .", "echo push", "npm run push-image",
+    "git status --short --branch && git push -u origin fix/x", "gh workflow run deploy.yml --ref main -R owner/repo",
+    "gh workflow run 'my flow.yml' -r 'feat/x y' --repo=o/r --json -F a=b",
+)
+
+PUSH_FRAGMENTS = (
+    " ", "  ", "\t", ";", "|", "&", "&&", "||", "\n", "\r", "'", '"', "\\", "\\\n", "(", ")", ":", ":x", "-", "--",
+    "git ", "push", "PUSH", "/usr/bin/git ", "GIT_X=1 ", "gh ", "pr ", "create", "workflow ", "run ", "--help", "-h",
+    "-H", "--HELP", "-n", "-d", "--dry-run", "--delete", "-R", "-R o/r", "-Ro/r", "--repo=o/r", "-r main", "--ref=x",
+    "-f a=b", "--json", "x.yml", "'a b'", "$(x)", "`x`", "#", "=", "İ", "\u3000", "é",
+) + UNICODE_FRAGMENTS
+
+PUSH_RESPONSES = (
+    {}, None, "text", [], {"stdout": "https://github.com/o/r/actions/runs/123456789"},
+    {"stdout": "https://github.com/o/r/actions/runs/42?x=1"}, {"output": "/actions/runs/7x"},
+    {"exit_code": 1}, {"exit_code": True}, {"exitCode": 1.0}, {"code": "1"}, {"success": False}, {"interrupted": True},
+    {"stderr": "To github.com:o/r.git"}, {"stderr": "Everything up-to-date"}, {"aggregated_output": "fatal: x"},
+    {"stdout": ["github.com"]}, {"stdout": {"a": "! [rejected]"}}, {"stdout": 0, "stderr": "GITHUB.COM"},
+)
+
+
+@unittest.skipUnless(helpers.TARGET == "hhx", "差分テストは hhx を対象にしたときだけ流す")
+class PushCIContextDifferentialTest(unittest.TestCase):
+    """push-ci-context の差分テスト。
+
+    コマンドの分割は Python の shlex を Go で書き直したので、区切り・引用・エスケープの境界を変形して比べる。
+    待機コマンドの文面は意図して変えた (wait-ci → hhx wait-ci) ので置き換えてから比べ、
+    workflow run の一覧を絞る時刻 (実行した時刻の 1 分前) は秒の揺れがあるので伏せる。
+    """
+
+    SCRIPT = "push-ci-context.py"
+    NAME = "push-ci-context"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_python_hook(cls.SCRIPT, seed="git push")
+        cls.root = tempfile.mkdtemp(prefix="hhx-diff-push-ci-")
+        cls.repos = {}
+        for name, origin in (("github", "https://github.com/o/r.git"), ("gitlab", "git@gitlab.com:o/r.git"),
+                             ("plain", None)):
+            path = os.path.join(cls.root, name)
+            os.makedirs(path)
+            if origin:
+                helpers.git(path, "init", "-q")
+                helpers.git(path, "remote", "add", "origin", origin)
+            cls.repos[name] = path
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    @staticmethod
+    def gate(text):
+        lower = text.lower()
+        return "push" in lower or ("pr" in lower and "create" in lower) or ("workflow" in lower and "run" in lower)
+
+    @staticmethod
+    def normalize(stdout):
+        stdout = re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", "<cutoff>", stdout)
+        return injection(stdout.replace("hhx wait-ci", "wait-ci"))
+
+    def commands(self, rng, count):
+        bases = list(PUSH_BASE_COMMANDS)
+        commands = bases + [mutate(rng, rng.choice(bases), PUSH_FRAGMENTS, bases) for _ in range(count)]
+        return unique(command for command in commands if "\x00" not in command)
+
+    def test_payloads(self):
+        rng = random.Random(SEED + 21)
+        raws = []
+        for command in self.commands(rng, CASES // 3):
+            event = rng.choice(("PostToolUse", "PostToolUse", "PostToolUse", "PreToolUse", "UserPromptSubmit"))
+            payload = {"session_id": "diff", "hook_event_name": event, "tool_name": "Bash",
+                       "tool_input": {"command": command},
+                       "cwd": rng.choice(list(self.repos.values()) + ["", os.path.join(self.root, "missing")]),
+                       "transcript_path": rng.choice(("/x/rollout-2026-diff.jsonl", "/x/diff.jsonl"))}
+            if rng.random() < 0.9:
+                payload["tool_response"] = rng.choice(PUSH_RESPONSES)
+            raws.append(json.dumps(payload, ensure_ascii=rng.random() < 0.5))
+        raws += ["", "push", "null", '"git push"', json.dumps({"tool_input": "git push"}),
+                 json.dumps({"tool_input": {"command": ["git", "push"]}}),
+                 json.dumps({"tool_input": {"command": "git push"}, "hook_event_name": ["x"]}),
+                 json.dumps({"tool_input": {"command": "git push"}, "hook_event_name": 1}),
+                 json.dumps({"tool_input": {"command": "git push"}, "cwd": 5}),
+                 json.dumps({"tool_input": {"command": "git push"}}) + " x"]
+        compare_injections(self, "push-ci-context (payload)", unique(raws),
+                           lambda raw: self.normalize(run_python_stdout(self.module, self.gate, raw=raw)),
+                           lambda raw: self.normalize(run_hhx_stdout(self.NAME, raw=raw)))
+
+    def test_argv(self):
+        rng = random.Random(SEED + 22)
+        commands = self.commands(rng, CASES // 5)
+        cwd = os.getcwd()
+        compare_injections(self, "push-ci-context (argv)", commands,
+                           lambda argv: self.normalize(run_python_stdout(self.module, self.gate, argv=argv)),
+                           lambda argv: self.normalize(run_hhx_stdout(self.NAME, argv=argv, cwd=cwd)))
+
+
+def compare_injections(test, name, cases, python, hhx, workers=None):
+    """cases の各入力を両方に通し、注入の内容の不一致を集めて失敗にする。"""
+    expected = [python(case) for case in cases]
+    if workers == 1:
+        actual = [hhx(case) for case in cases]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers or min(16, (os.cpu_count() or 4) * 2)) as pool:
+            actual = list(pool.map(hhx, cases))
+    mismatches = [(case, want, got) for case, want, got in zip(cases, expected, actual) if want != got]
+    injected = sum(1 for want in expected if want is not None)
+    print(f"\n{name}: {len(cases)} 件を比較 (Python で注入 {injected} 件、不一致 {len(mismatches)} 件)", file=sys.stderr)
+    if mismatches:
+        lines = [f"{name}: Python と hhx の結果が {len(mismatches)} 件違う (seed={SEED})"]
+        for case, want, got in mismatches[:15]:
+            lines.append(f"  入力: {case!r}\n    python: {want!r}\n    hhx:    {got!r}")
+        test.fail("\n".join(lines))
+
+
+ORIGIN_BASES = (
+    "https://github.com/o/r.git", "https://github.com/o/r", "git@github.com:o/r.git", "ssh://git@github.com/o/r.git",
+    "https://github.com/o/r/", "git@gitlab.com:o/r.git", "https://notgithub.com/o/r.git", "/local/path/repo",
+    "https://GitHub.COM/Owner/Repo.GIT", "git@github.com:o/r.git/", "https://x/github.com/o/r",
+)
+
+ORIGIN_FRAGMENTS = (
+    "github.com", "GITHUB.COM", "gıthub.com", "gİthub.com", "notgithub.com", "-", "_", ".", "a", "Z", "0", "\u212a",
+    "\u017f", "\u0131", "\u0130", "é", "日本", ":", "/", "//", ":/", ".git", ".GIT", ".gıt", ".git/", " ", "\t", "o", "r",
+    "x/", "git@", "https://", "ssh://git@", "?", "#", "%",
+)
+
+STALE_GRAPHQL = {"data": {"repository": {"object": {"associatedPullRequests": {"nodes": [{
+    "number": 7, "url": "https://github.com/o/r/pull/7", "state": "OPEN", "lastEditedAt": "2026-09-10T07:10:57Z",
+    "createdAt": "2026-09-10T07:06:57Z", "commits": {"nodes": [{"commit": {
+        "committedDate": "2026-09-10T07:36:15Z", "messageHeadline": "feat: x", "parents": {"totalCount": 1}}}]}}]}}}}}
+
+
+@unittest.skipUnless(helpers.TARGET == "hhx", "差分テストは hhx を対象にしたときだけ流す")
+class PrBodyStalenessDifferentialTest(unittest.TestCase):
+    """pr-body-staleness の差分テスト。
+
+    origin の URL から owner と repo を取る ORIGIN_PATTERN は、後読み (?<![A-Za-z0-9-]) を手書きの走査に置き換えたので、
+    origin を変形して Python 本体と hhx に同じリポジトリを読ませ、注入の内容と gh の呼び出し (owner・repo) を比べる。
+    push の判定 (正規表現で区切る別の実装) も、コマンドを変形して比べる。gh は偽の gh (fake_gh.py) で差し替える。
+    """
+
+    SCRIPT = "pr-body-staleness.py"
+    NAME = "pr-body-staleness"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_python_hook(cls.SCRIPT, seed="git push")
+        cls.root = tempfile.mkdtemp(prefix="hhx-diff-pr-body-")
+        cls.fixtures = os.path.join(cls.root, "gh")
+        os.makedirs(cls.fixtures)
+        shutil.copy(helpers.FAKE_GH, os.path.join(cls.fixtures, "gh"))
+        os.chmod(os.path.join(cls.fixtures, "gh"), 0o755)
+        with open(os.path.join(cls.fixtures, "graphql.json"), "w", encoding="utf-8") as file:
+            json.dump(STALE_GRAPHQL, file)
+        cls.saved_environ = dict(os.environ)
+        os.environ.update({"PATH": cls.fixtures + os.pathsep + os.environ["PATH"], "FAKE_GH_DIR": cls.fixtures,
+                           "FAKE_GH_MODE": "ok", **helpers.GIT_ISOLATION})
+        cls.repo = os.path.join(cls.root, "repo")
+        os.makedirs(cls.repo)
+        helpers.git(cls.repo, "init", "-q")
+        helpers.git(cls.repo, "commit", "-q", "--allow-empty", "-m", "init")
+        helpers.git(cls.repo, "remote", "add", "origin", "https://github.com/o/r.git")
+
+    @classmethod
+    def tearDownClass(cls):
+        os.environ.clear()
+        os.environ.update(cls.saved_environ)
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    @staticmethod
+    def gate(text):
+        return "push" in text.lower()
+
+    def calls(self):
+        path = os.path.join(self.fixtures, "calls.log")
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding="utf-8") as file:
+            calls = [json.loads(line)["argv"] for line in file]
+        os.remove(path)
+        return calls
+
+    def payload(self, command="git push origin HEAD"):
+        return json.dumps({"session_id": "diff", "hook_event_name": "PostToolUse", "tool_name": "Bash",
+                           "tool_input": {"command": command}, "tool_response": {}, "cwd": self.repo})
+
+    def run_both(self, raw):
+        self.calls()
+        python = injection(run_python_stdout(self.module, self.gate, raw=raw)), self.calls()
+        hhx = injection(run_hhx_stdout(self.NAME, raw=raw)), self.calls()
+        return python, hhx
+
+    def test_origins(self):
+        rng = random.Random(SEED + 31)
+        bases = list(ORIGIN_BASES)
+        urls = bases + [mutate(rng, rng.choice(bases), ORIGIN_FRAGMENTS, bases) for _ in range(CASES // 10)]
+        urls = unique(url.strip() for url in urls if "\x00" not in url and "\n" not in url and url.strip())
+        results = []
+        for url in urls:
+            helpers.git(self.repo, "config", "remote.origin.url", url)
+            results.append((url,) + self.run_both(self.payload()))
+        mismatches = [(url, want, got) for url, want, got in results if want != got]
+        matched = sum(1 for _url, want, _got in results if want[1])
+        print(f"\npr-body-staleness (origin): {len(urls)} 件を比較 (Python で gh を呼んだもの {matched} 件、"
+              f"不一致 {len(mismatches)} 件)", file=sys.stderr)
+        if mismatches:
+            self.fail("\n".join(f"  origin: {url!r}\n    python: {want!r}\n    hhx:    {got!r}"
+                                 for url, want, got in mismatches[:15]))
+
+    def test_commands(self):
+        rng = random.Random(SEED + 32)
+        helpers.git(self.repo, "config", "remote.origin.url", "https://github.com/o/r.git")
+        bases = list(PUSH_BASE_COMMANDS)
+        commands = bases + [mutate(rng, rng.choice(bases), PUSH_FRAGMENTS, bases) for _ in range(CASES // 10)]
+        commands = unique(command for command in commands if "\x00" not in command)
+        results = [(command,) + self.run_both(self.payload(command)) for command in commands]
+        mismatches = [(command, want, got) for command, want, got in results if want != got]
+        print(f"\npr-body-staleness (command): {len(commands)} 件を比較 (不一致 {len(mismatches)} 件)", file=sys.stderr)
+        if mismatches:
+            self.fail("\n".join(f"  command: {command!r}\n    python: {want!r}\n    hhx:    {got!r}"
+                                 for command, want, got in mismatches[:15]))
+
+
+PR_PROMPT_BASES = (
+    "https://github.com/o/r/pull/1", "http://github.com/o/r/pull/2", "https://www.github.com/o/r/pull/3",
+    "github.com/o/r/pull/1", "見て → https://github.com/o/r/pull/1 です", "(https://github.com/o/r/pull/2)",
+    "https://github.com/o/r/pull/1#discussion_r11", "https://github.com/o/r/pull/2#discussion_r22 と r33",
+    "https://github.com/o/r/pull/1 https://github.com/o/r/pull/2 https://github.com/o/r/pull/3 https://github.com/o/r/pull/4",
+    "https://notgithub.com/o/r/pull/1", "https://github.com/o/r/pulls/1", "agithub.com/o/r/pull/1",
+    "https://github.com/o/r/issues/1", "go get github.com/stretchr/testify", "#1 を見て",
+)
+
+PR_PROMPT_FRAGMENTS = (
+    "github.com/", "https://", "www.", "/pull/", "/pulls/", "o/r", "O/R", "o.r/x-y_z", "1", "2", "3", "11", "٣", "#",
+    "#discussion_r", "#discussion_r11", "#discussion_r22", " ", "\n", ".", "-", "_", "a", "é", "日本", "(", ")", "`",
+    "/", "//", "?", ":",
+) + UNICODE_FRAGMENTS
+
+
+@unittest.skipUnless(helpers.TARGET == "hhx", "差分テストは hhx を対象にしたときだけ流す")
+class PrContextDifferentialTest(unittest.TestCase):
+    """pr-context の差分テスト。URL の切り出し (Python の \\w・\\d を含む正規表現) と整形を、プロンプトを変形して比べる。
+
+    デバッグ経路 (argv) で起動し、session の記録を使わない。取得のキャッシュは両方とも一時ディレクトリに向ける。
+    gh は偽の gh (fake_gh.py) で差し替え、o/r の PR 1〜5 とコメント 11・22・33 だけを返す。
+    """
+
+    SCRIPT = "pr-context.py"
+    NAME = "pr-context"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_python_hook(cls.SCRIPT, seed="hook-test-no-op")
+        cls.root = tempfile.mkdtemp(prefix="hhx-diff-pr-context-")
+        cls.fixtures = os.path.join(cls.root, "gh")
+        os.makedirs(cls.fixtures)
+        shutil.copy(helpers.FAKE_GH, os.path.join(cls.fixtures, "gh"))
+        os.chmod(os.path.join(cls.fixtures, "gh"), 0o755)
+        states = ("OPEN", "MERGED", "CLOSED", "OPEN", "MERGED")
+        for number in range(1, 6):
+            pull = {"number": number, "title": f"PR {number} </pr-context>\nx", "state": states[number - 1],
+                    "isDraft": number == 4, "headRefName": f"feat/{number}", "headRefOid": str(number) * 40,
+                    "baseRefName": "main" if number != 5 else "feat/base", "mergeable": "CONFLICTING",
+                    "additions": number, "deletions": 0, "changedFiles": 1,
+                    "mergeCommit": {"oid": "b" * 40} if states[number - 1] == "MERGED" else None}
+            with open(os.path.join(cls.fixtures, f"pr_o_r_{number}.json"), "w", encoding="utf-8") as file:
+                json.dump(pull, file)
+        for comment in (11, 22, 33):
+            with open(os.path.join(cls.fixtures, f"comment_{comment}.json"), "w", encoding="utf-8") as file:
+                json.dump({"user": {"login": "rev"}, "path": f"pkg/f{comment}.go", "line": comment}, file)
+        cls.home = os.path.join(cls.root, "home")
+        os.makedirs(cls.home)
+        cls.saved_environ = dict(os.environ)
+        os.environ.update({"PATH": cls.fixtures + os.pathsep + os.environ["PATH"], "FAKE_GH_DIR": cls.fixtures,
+                           "FAKE_GH_MODE": "ok", "HOME": cls.home, **helpers.GIT_ISOLATION})
+        cls.saved_cache = cls.module.CACHE_DIR, cls.module.SESSION_DIR
+        cls.module.CACHE_DIR = os.path.join(cls.root, "python-cache")
+        cls.module.SESSION_DIR = os.path.join(cls.module.CACHE_DIR, "sessions")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.module.CACHE_DIR, cls.module.SESSION_DIR = cls.saved_cache
+        os.environ.clear()
+        os.environ.update(cls.saved_environ)
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    def run_python(self, prompt):
+        saved = sys.argv
+        sys.argv = ["hook", prompt]
+        self.module._DIR_CACHE.clear()
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                self.module.main()
+        except Exception:  # noqa: BLE001  移植元は main の外側で例外を握りつぶす
+            return ""
+        finally:
+            sys.argv = saved
+        return out.getvalue()
+
+    def test_prompts(self):
+        rng = random.Random(SEED + 41)
+        bases = list(PR_PROMPT_BASES)
+        prompts = bases + [mutate(rng, rng.choice(bases), PR_PROMPT_FRAGMENTS, bases) for _ in range(CASES // 10)]
+        prompts = unique(prompt for prompt in prompts if "\x00" not in prompt)
+        cwd = helpers.HOOK_RUN_CWD
+        saved = os.getcwd()
+        os.chdir(cwd)
+        try:
+            compare_injections(self, "pr-context (argv)", prompts, lambda prompt: injection(self.run_python(prompt)),
+                               lambda prompt: injection(run_hhx_stdout(self.NAME, argv=prompt, cwd=cwd)), workers=1)
+        finally:
+            os.chdir(saved)
+
+
+AGENTS_PATH_FRAGMENTS = (
+    " ", "/", "./", "../", "src/", "src/service/", "target.py", "missing", "*", "?", "[", ":12", ":1:2", "'", '"',
+    "--file=", "-f=", "-", "~/", "$HOME/", "${HOME}/", "$NOPE/", "https://x/", "\n", "\t", "\\", ";", "|", "&&",
+    "*** Update File: ", "--- ", "+++ ", "cat ", "ls ", "sed -n 1p ", "cd ", "é", "日本",
+) + UNICODE_FRAGMENTS
+
+
+@unittest.skipUnless(helpers.TARGET == "hhx", "差分テストは hhx を対象にしたときだけ流す")
+class AgentsLocalContextDifferentialTest(unittest.TestCase):
+    """agents-local-context の差分テスト。対象のパスの集め方 (shlex.split、apply_patch の行、パスの正規化) を比べる。
+
+    1 件ごとに別の session_id を使い、重複の抑止が比較に混ざらないようにする。Python 本体は CODEX_HOME に、
+    hhx は XDG_CACHE_HOME に状態を置く。警告の文面は例外の説明の書き方が違うので、警告の種類 (: の前) だけを比べる。
+    """
+
+    SCRIPT = "agents-local-context.py"
+    NAME = "agents-local-context"
+
+    @classmethod
+    def setUpClass(cls):
+        load_python_hook("pr-merge-guard.py")  # HHX_COMPAT_PYTHON_HOOKS が無ければここで skip する
+        # dataclass はモジュールが sys.modules にあることを前提にするので、登録してから読み込む。
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "hook_python_agents_local_context", helpers._python_hooks_dir() / cls.SCRIPT)
+        cls.module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = cls.module
+        spec.loader.exec_module(cls.module)
+        cls.root = os.path.realpath(tempfile.mkdtemp(prefix="hhx-diff-agents-local-"))
+        cls.repo = os.path.join(cls.root, "repo")
+        os.makedirs(os.path.join(cls.repo, "src", "service"))
+        helpers.git(cls.repo, "init", "-q")
+        for relative, text in (("AGENTS.local.md", "root-local\n"), ("src/AGENTS.local.md", "src-local\n"),
+                               ("src/service/AGENTS.local.md", "service-local\n"), ("src/service/target.py", "x\n")):
+            with open(os.path.join(cls.repo, relative), "w", encoding="utf-8") as file:
+                file.write(text)
+        cls.saved_environ = dict(os.environ)
+        os.environ.update({"HOME": cls.root, "CODEX_HOME": os.path.join(cls.root, "codex"),
+                           "XDG_CACHE_HOME": os.path.join(cls.root, "cache"), **helpers.GIT_ISOLATION})
+
+    @classmethod
+    def tearDownClass(cls):
+        os.environ.clear()
+        os.environ.update(cls.saved_environ)
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    def run_python(self, raw):
+        saved = sys.stdin
+        sys.stdin = io.StringIO(raw)
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                try:
+                    self.module.main()
+                except Exception as exc:  # noqa: BLE001  移植元の __main__ と同じく警告にする
+                    self.module.emit("PreToolUse", errors=[f"予期しないエラー ({type(exc).__name__}): {exc}"])
+        finally:
+            sys.stdin = saved
+        return out.getvalue()
+
+    @staticmethod
+    def normalize(stdout):
+        data = injection(stdout)
+        if isinstance(data, dict) and "systemMessage" in data:
+            data["systemMessage"] = [part.split(":")[0].split(" (")[0]
+                                     for part in data["systemMessage"].split("; ")]
+        return data
+
+    def test_tool_inputs(self):
+        rng = random.Random(SEED + 51)
+        bases = ["sed -n 1p src/service/target.py", "cat src/service/target.py src/x", "ls src", "ls",
+                 "*** Begin Patch\n*** Update File: src/service/target.py\n@@\n*** End Patch",
+                 f"cat {self.repo}/src/service/target.py", "cat 'src/service/target.py:12'", "echo 'unterminated"]
+        raws = []
+        for index in range(CASES // 10):
+            command = mutate(rng, rng.choice(bases), AGENTS_PATH_FRAGMENTS, bases)
+            path = mutate(rng, rng.choice(("src/service/target.py", "src", "missing/x", self.repo + "/src")),
+                          AGENTS_PATH_FRAGMENTS, bases)
+            tool_input = rng.choice((
+                {"command": command}, {"cmd": command}, command, {"file_path": path, "content": "x"},
+                {"command": command, "workdir": rng.choice(("src", "src/service", "missing", "", path))},
+                {"paths": [path, {"target": path}]}, {"x": {"File": path}}, {"command": [command]}, None, 5,
+            ))
+            payload = {"session_id": f"diff-{index}", "hook_event_name": "PreToolUse", "tool_name": "x",
+                       "cwd": rng.choice((self.repo, self.repo + "/src", "~", "~/repo", "", "src", "src/missing", self.root)),
+                       "tool_input": tool_input}
+            if "\x00" not in json.dumps(payload):
+                raws.append(json.dumps(payload, ensure_ascii=rng.random() < 0.5))
+        raws += ["", "x", "[]", json.dumps({"hook_event_name": "PreToolUse"}),
+                 json.dumps({"hook_event_name": "SessionStart", "source": "startup", "cwd": self.repo, "session_id": "s"}),
+                 json.dumps({"hook_event_name": "SubagentStart", "cwd": self.repo}),
+                 json.dumps({"hook_event_name": "SessionEnd", "cwd": self.repo, "session_id": "e"})]
+        # 相対の cwd はプロセスの作業ディレクトリを基準にするので、両方をリポジトリの中で起動する。
+        saved = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            compare_injections(self, "agents-local-context (payload)", unique(raws),
+                               lambda raw: self.normalize(self.run_python(raw)),
+                               lambda raw: self.normalize(run_hhx_stdout(self.NAME, raw=raw, cwd=self.repo)), workers=1)
+        finally:
+            os.chdir(saved)
 
 
 if __name__ == "__main__":

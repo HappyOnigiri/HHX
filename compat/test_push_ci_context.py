@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helpers import git, hook_command, load_hook
+from helpers import WAIT_CI_COMMAND, git, hook_command, load_hook
 
 SCRIPT = "push-ci-context.py"
 GATE_SEED = "git push"
@@ -83,6 +83,7 @@ class ContractTest(unittest.TestCase):
         context, _ = run_post_tool_use("git push origin HEAD", cwd=self.github_repo)
         self.assertIsNotNone(context)
         self.assertIn("wait-ci", context)
+        self.assertIn(f"`{WAIT_CI_COMMAND}` を引数なしで実行し", context)
         self.assertIn("timeout:600000", context)
         self.assertNotIn("functions.exec", context)
         self.assertNotIn("write_stdin", context)
@@ -93,6 +94,7 @@ class ContractTest(unittest.TestCase):
         self.assertIn('"yield_time_ms":3600000', context)
         self.assertIn("write_stdin", context)
         self.assertIn("exit_code", context)
+        self.assertIn(f"cmd:{json.dumps(WAIT_CI_COMMAND)},", context)
         self.assertNotIn("timeout:600000", context)
 
     def test_claude_does_not_inherit_codex_instructions(self):
