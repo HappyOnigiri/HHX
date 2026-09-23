@@ -136,3 +136,31 @@ func TestQuoteJSON(t *testing.T) {
 		}
 	}
 }
+
+// 期待値は Python の bytes.decode("utf-8", "replace") の結果である。
+func TestDecodeUTF8Replace(t *testing.T) {
+	for _, test := range []struct{ in, want string }{
+		{"", ""},
+		{"abc", "abc"},
+		{"\xe3\x81", "�"},
+		{"\xe3\x81A", "�A"},
+		{"\xe3\x81\x82", "あ"},
+		{"\xf0\x9f\x98", "�"},
+		{"\xf0\x9f\x98\x80", "\U0001f600"},
+		{"\xed\xa0\x80", "���"},
+		{"\xc0\xaf", "��"},
+		{"\xe0\x80\xaf", "���"},
+		{"\xf4\x90\x80\x80", "����"},
+		{"\xf5", "�"},
+		{"\x80\x80", "��"},
+		{"\xc2", "�"},
+		{"\xe0\xa0", "�"},
+		{"\xf0\x90\x80", "�"},
+		{"a\xffb", "a�b"},
+		{"\xef\xbf\xbd", "�"},
+	} {
+		if got := DecodeUTF8Replace([]byte(test.in)); got != test.want {
+			t.Errorf("DecodeUTF8Replace(%q)=%q, want %q", test.in, got, test.want)
+		}
+	}
+}

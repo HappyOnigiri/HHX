@@ -37,6 +37,7 @@ if TARGET not in ("hhx", "python"):
 PORTED_HOOKS = frozenset({
     "dangerous-rm-guard",
     "discard-guard",
+    "exit-plan-subagent-guard",
     "forbidden-term-guard",
     "git-hookspath-guard",
     "idle-wait-guard",

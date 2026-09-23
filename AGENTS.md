@@ -67,6 +67,7 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
   - 一次ゲートのキーワードは変えない。「ゲートで抜ける＝判定しない」こともテストで固定されている。
     開錠の環境変数のように stdin の中身を見ずに抜ける条件も `Gate` に置く。
   - argv のデバッグ経路（`Context.FromArgs`）での引数の解釈は、移植元の hook ごとの扱いに合わせる。
+    移植元が argv では一次ゲートを通さない（引数が payload でもコマンド文字列でもない）なら、`GateStdinOnly` を立てる。
   - Python で例外になって無出力で終わっていた入力（文字列でない `command` など）は、無出力にする。
 - 正規表現と文字列処理の違いで判定がずれやすい。
   - `\s`・`\S`・`\d`・`\w`・`\W`・`\b`、`str.split()`・`strip()`・`splitlines()` は `internal/pycompat` を使う。Go の `\s`・`\w`・`\b` や `strings.Fields` は範囲が違う。

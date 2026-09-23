@@ -102,6 +102,30 @@ func TestGateRunsBeforeConfig(t *testing.T) {
 	}
 }
 
+func TestGateStdinOnlySkipsTheGateForArgs(t *testing.T) {
+	for _, stdinOnly := range []bool{false, true} {
+		ran := false
+		definition := &Definition{
+			Name: "g", DefaultEnabled: true, GateStdinOnly: stdinOnly,
+			Gate: func(input []byte) bool { return bytes.Contains(input, []byte("ExitPlanMode")) },
+			Run: func(*Context) error {
+				ran = true
+				return nil
+			},
+		}
+		invoke(definition, "", "/tmp/transcript.jsonl")
+		if ran != stdinOnly {
+			t.Errorf("GateStdinOnly=%v: ran=%v with args", stdinOnly, ran)
+		}
+		// stdin の入力には、どちらでもゲートを当てる。
+		ran = false
+		invoke(definition, `{"tool_name":"Bash"}`)
+		if ran {
+			t.Errorf("GateStdinOnly=%v: the gate must close for stdin", stdinOnly)
+		}
+	}
+}
+
 func TestConfigDecidesEnabled(t *testing.T) {
 	disabled, enabled := false, true
 	cfg := &config.Config{Hooks: map[string]config.Hook{

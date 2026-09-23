@@ -39,6 +39,9 @@ type Definition struct {
 	// Gate は payload を解析する前に、生の入力の部分一致で大半の呼び出しを抜ける一次ゲートである。
 	// 偽を返すと設定も読まずに無出力で終わる。nil なら常に通す。
 	Gate func(input []byte) bool
+	// GateStdinOnly が真なら、デバッグ経路（引数）の入力には Gate を当てない。
+	// 引数が payload でもコマンド文字列でもない hook（exit-plan-subagent-guard は transcript のパスを受け取る）で使う。
+	GateStdinOnly bool
 	// Run は hook の本体である。エラーを返すか panic すると、出力を捨てて無出力で終わる（fail-open）。
 	Run func(*Context) error
 	// NewSettings は Context.Settings へ渡す hook 固有の設定の零値を返す。nil なら hook 固有の設定を持たない。
