@@ -3,6 +3,7 @@
 // Go の regexp の \s・\d・\b と strings.Fields は ASCII か Go 独自の空白の定義で動き、Python（str のパターン）と
 // 一致する文字の範囲が違う。移植した正規表現はここにある文字クラスで書き、空白での分割もここの関数で行う。
 // シェルのコマンドの分割やトークンの解釈は hook ごとに違うので、ここには置かない（AGENTS.md の不変条件）。
+// Python の shlex の字句解析（ShlexSplit）だけは置くが、空白と区切りの文字は呼び出し側が決める。
 // 文字の分類は Go の unicode の表で行うので、Unicode の版の違い（Python 3.14 は 16.0）による差は残る。
 package pycompat
 
@@ -75,6 +76,11 @@ func Fields(s string) []string {
 // Strip は Python の str.strip()（引数なし）と同じく、両端の空白を除く。
 func Strip(s string) string {
 	return strings.TrimFunc(s, IsSpace)
+}
+
+// RStrip は Python の str.rstrip()（引数なし）と同じく、末尾の空白を除く。
+func RStrip(s string) string {
+	return strings.TrimRightFunc(s, IsSpace)
 }
 
 // LStrip は Python の str.lstrip()（引数なし）と同じく、先頭の空白を除く。
