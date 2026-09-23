@@ -475,6 +475,18 @@ func snapshot(runner gitRunner, top, label string) snapshotResult {
 	if _, ok := runner.git(top, indexEnv, "add", "-A"); !ok {
 		return failed
 	}
+	// add -A は一時 index に無い ignored のファイルを足さないので、本物の index で追跡中の ignored のファイル（add -f で登録したもの）を
+	// update-index で取り込む（無くなっていれば --remove で消す）。本物の index を一時 index へコピーしないのは、同じ作業ツリーで並行して
+	// 走ったときに、他方の add -A と write-tree の間で一時 index を巻き戻さないため。
+	ignored, ok := runner.run(top, nil, "", "ls-files", "-z", "--cached", "--ignored", "--exclude-standard")
+	if !ok {
+		return failed
+	}
+	if ignored != "" {
+		if _, ok := runner.run(top, indexEnv, ignored, "update-index", "--add", "--remove", "-z", "--stdin"); !ok {
+			return failed
+		}
+	}
 	tree, ok := runner.git(top, indexEnv, "write-tree")
 	if !ok || tree == "" {
 		return failed
@@ -486,7 +498,7 @@ func snapshot(runner gitRunner, top, label string) snapshotResult {
 
 	args := []string{"commit-tree"}
 	if head != "" {
-		// HEAD と同じ木なら保存するものが無い（gitignore の対象は元から含まない）。
+		// HEAD と同じ木なら保存するものが無い（追跡していない ignored のファイルは元から含まない）。
 		if headTree, ok := runner.git(top, nil, "rev-parse", "-q", "HEAD^{tree}"); ok && headTree == tree {
 			return clean
 		}
@@ -511,8 +523,14 @@ type gitRunner struct {
 }
 
 // git は `git -C <directory> <args...>` を実行し、stdout の両端の空白を除いて返す。失敗・タイムアウトなら ok は偽になる。
-// 利用者の環境（GIT_* を含む）はそのまま継承し、env の分だけ足す。
 func (r gitRunner) git(directory string, env []string, args ...string) (string, bool) {
+	output, ok := r.run(directory, env, "", args...)
+	return py.Strip(output), ok
+}
+
+// run は `git -C <directory> <args...>` を stdin を渡して実行し、stdout をそのまま返す（-z の出力のパスの空白を削らない）。
+// 利用者の環境（GIT_* を含む）はそのまま継承し、env の分だけ足す。
+func (r gitRunner) run(directory string, env []string, stdin string, args ...string) (string, bool) {
 	remaining := time.Until(r.deadline)
 	if remaining <= 0 {
 		return "", false
@@ -525,10 +543,13 @@ func (r gitRunner) git(directory string, env []string, args ...string) (string, 
 	}
 	// 子孫のプロセスが出力を開いたまま残っても、タイムアウトの後に待ち続けない。
 	command.WaitDelay = time.Second
+	if stdin != "" {
+		command.Stdin = strings.NewReader(stdin)
+	}
 	var stdout bytes.Buffer
 	command.Stdout = &stdout
 	if command.Run() != nil {
 		return "", false
 	}
-	return py.Strip(stdout.String()), true
+	return stdout.String(), true
 }

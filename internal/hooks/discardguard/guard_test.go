@@ -1004,6 +1004,35 @@ func TestSnapshotSavesTrackedAndUntracked(t *testing.T) {
 	}
 }
 
+// 追跡中で gitignore にも一致するファイル（add -f で登録したもの）の変更と削除も snapshot に入る。
+// 入らないと、reset --hard で変更が消えるうえに、README の手順での復元がそのファイルを削除する。
+func TestSnapshotSavesTrackedIgnoredFiles(t *testing.T) {
+	repo := tempRepo(t, repoOptions{clean: true})
+	writeFile(t, filepath.Join(repo, ".gitignore"), "*.env\n")
+	writeFile(t, filepath.Join(repo, " spaced.env"), "v1\n")
+	writeFile(t, filepath.Join(repo, "removed.env"), "v1\n")
+	gitRun(t, repo, "add", ".gitignore")
+	gitRun(t, repo, "add", "-f", " spaced.env", "removed.env")
+	gitRun(t, repo, "commit", "-q", "-m", "tracked ignored")
+	writeFile(t, filepath.Join(repo, " spaced.env"), "v2-uncommitted\n")
+	if err := os.Remove(filepath.Join(repo, "removed.env")); err != nil {
+		t.Fatal(err)
+	}
+	status := gitRun(t, repo, "status", "--porcelain")
+
+	expectPass(t, "git reset --hard", repo)
+	if got := show(t, repo, snapshotRef+": spaced.env"); got != "v2-uncommitted" {
+		t.Errorf(" spaced.env = %q", got)
+	}
+	if got := gitRun(t, repo, "ls-tree", "--name-only", snapshotRef, "removed.env"); got != "" {
+		t.Errorf("removed.env must be absent from the snapshot: %q", got)
+	}
+	// 本物の index と作業ツリーには触らない。
+	if got := gitRun(t, repo, "status", "--porcelain"); got != status {
+		t.Errorf("status changed: %q -> %q", status, got)
+	}
+}
+
 func TestSnapshotSavesStagedChanges(t *testing.T) {
 	repo := tempRepo(t, repoOptions{})
 	writeFile(t, filepath.Join(repo, "staged.txt"), "staged\n")
