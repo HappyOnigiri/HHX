@@ -16,6 +16,9 @@ import unittest
 from pathlib import Path
 
 from helpers import (
+    SNAPSHOT_REF,
+    TARGET,
+    HOOK_RUN_CWD,
     HookTestCase,
     codex_exec_pretooluse_payload,
     git,
@@ -28,7 +31,10 @@ from helpers import (
 )
 
 SCRIPT = "worktree-guard.py"
-REF = "refs/claude/wt-snapshot"
+# hhx の discard-guard では ref・作成者・一時 index の名前を変えた (compat/README.md)。
+REF = SNAPSHOT_REF
+SNAPSHOT_AUTHOR = "hhx <hhx@localhost>" if TARGET == "hhx" else "claude-hook <claude-hook@localhost>"
+SNAPSHOT_INDEX = "hhx-discard-snapshot.index" if TARGET == "hhx" else "claude-wt-snapshot.index"
 
 UNRESOLVED = "静的に特定できず"   # DENY_UNRESOLVED の目印
 FAILED = "作成に失敗"             # DENY_FAILED の目印
@@ -86,6 +92,21 @@ class SandboxMixin:
     @classmethod
     def drop_sandbox(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
+
+
+def labels_from_hook(command):
+    """hhx で、command に当たったルールのラベルを理由文から読む。
+
+    hhx は Python 本体のように DISCARD_RULES を import できない。payload の cwd を存在しないディレクトリにすると、
+    ルールに当たったコマンドは必ず DENY_UNRESOLVED になり、先頭行にラベルが " / " 区切りで出る。
+    """
+    decision, reason = run_hook(SCRIPT, command, os.path.join(HOOK_RUN_CWD, "missing-for-labels"))
+    if decision is None:
+        return []
+    head = reason.splitlines()[0]
+    prefix = "❌ ブロック: "
+    assert head.startswith(prefix), reason
+    return head[len(prefix):].split(" / ")
 
 
 class MainWorkspacePassThroughTest(SandboxMixin, unittest.TestCase):
@@ -194,6 +215,8 @@ class PassThroughTest(SandboxMixin, WorktreeGuardHookTestCase):
         cls.drop_sandbox()
 
     def labels(self, command):
+        if TARGET == "hhx":
+            return labels_from_hook(command)
         return [label for label, rule in self.mod.DISCARD_RULES
                 if self.mod.matches(rule, command)]
 
@@ -429,6 +452,7 @@ class DenyTest(SandboxMixin, WorktreeGuardHookTestCase):
         self.assertIn("git reset --hard / git clean -f", reason)
 
 
+@unittest.skipIf(TARGET == "hhx", "linked worktree へのブランチ attach の deny は hhx に入れない (wx へ移る)")
 class DetachedWorktreePolicyTest(WorktreeGuardHookTestCase):
     """linked は常に detached、ブランチを attach できるのは main だけ。"""
 
@@ -880,7 +904,7 @@ class SnapshotTest(unittest.TestCase):
         run_hook(SCRIPT, "git reset --hard", repo)
         self.assertEqual(git(repo, "rev-parse", f"{REF}^"), head)
         self.assertEqual(git(repo, "log", "-1", "--format=%an <%ae>", REF),
-                         "claude-hook <claude-hook@localhost>")
+                         SNAPSHOT_AUTHOR)
         self.assertIn("wt-snapshot: git reset --hard",
                       git(repo, "log", "-1", "--format=%s", REF))
 
@@ -990,8 +1014,7 @@ class SnapshotTest(unittest.TestCase):
     def test_temp_index_is_reused(self):
         repo = self.temp_repo()
         run_hook(SCRIPT, "git reset --hard", repo)
-        index = Path(git(repo, "rev-parse", "--absolute-git-dir"),
-                     "claude-wt-snapshot.index")
+        index = Path(git(repo, "rev-parse", "--absolute-git-dir"), SNAPSHOT_INDEX)
         self.assertTrue(index.exists())
         first_mtime = index.stat().st_mtime_ns
         Path(repo, "another.txt").write_text("y\n", encoding="utf-8")
@@ -1157,10 +1180,10 @@ class WorktreeEnvironmentTest(unittest.TestCase):
                                       ("wt2", self.wt2))}
         self.assertEqual(len(set(gitdirs.values())), 3, gitdirs)
         for name in ("main", "wt1"):
-            self.assertTrue(Path(gitdirs[name], "claude-wt-snapshot.index").exists(),
+            self.assertTrue(Path(gitdirs[name], SNAPSHOT_INDEX).exists(),
                             f"{name} の一時 index がない")
         # 触っていない wt2 には作られない
-        self.assertFalse(Path(gitdirs["wt2"], "claude-wt-snapshot.index").exists())
+        self.assertFalse(Path(gitdirs["wt2"], SNAPSHOT_INDEX).exists())
 
     def test_ref_is_shared_but_reflog_identifies_the_worktree(self):
         """既知の挙動: ref は worktree 間で共有される。判別はメッセージの "@ <top>" で行う。"""

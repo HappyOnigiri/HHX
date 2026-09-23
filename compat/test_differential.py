@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Python 実装と hhx の差分テスト (irreversible-guard・dangerous-rm-guard)。
+"""Python 実装と hhx の差分テスト (irreversible-guard・dangerous-rm-guard・discard-guard)。
 
 実行: HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレクトリ> make compat-test（compat/README.md を参照）
 
@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 import helpers
@@ -176,10 +177,10 @@ def random_command(rng, fragments):
     return "".join(rng.choice(fragments) for _ in range(rng.randint(1, 8)))
 
 
-def compare(test, name, cases, python, hhx):
+def compare(test, name, cases, python, hhx, workers=None):
     """cases の各入力を両方に通し、判定と理由文の不一致を集めて失敗にする。"""
     expected = [python(case) for case in cases]
-    workers = min(16, (os.cpu_count() or 4) * 2)
+    workers = workers or min(16, (os.cpu_count() or 4) * 2)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         actual = list(pool.map(hhx, cases))
     mismatches = [(case, want, got) for case, want, got in zip(cases, expected, actual) if want != got]
@@ -373,6 +374,161 @@ class DangerousRmDifferentialTest(unittest.TestCase):
                     lambda argv: run_hhx(self.NAME, argv=argv, cwd=self.deep))
         finally:
             os.chdir(saved)
+
+
+DISCARD_FRAGMENTS = (
+    " ", "  ", "\t", "\n", ";", "&", "&&", "|", "||", "(", ")", "{ ", " }", "'", '"', "`", "$X", "~", "~/", "*", "?",
+    "=", "git ", "/usr/bin/git ", "rtk git ", "git --no-pager ", "git -p ", "git --literal-pathspecs ",
+    "git --git-dir=x ", "git --work-tree=x ", "git --exec-path=x ", "git -C ", "git -C{B} ", "git -C {B} ",
+    "git -C sub ", "git -C . ", "git -C .. ", "git -C ~ ", "git -C 'a b' ", "git -c a=b ", "git -c 'a b' ",
+    "git -c \"a b\" ", "reset ", "--hard", "--soft", "checkout ", "-B ", "-- ", ".", ":/", "-f", "--force",
+    "switch ", "-C ", "--discard-changes", "restore ", "--staged", "--staged=x", "--worktree", "-SW", "-s ",
+    "clean ", "-fd", "-xdf", "-n", "apply ", "-R", "-3", "-R3", "-3R", "--3way", "--reject", "--check", "--cached",
+    "-p3", "-C3", "fix.patch", "cd ", "cd {A} && ", "cd {B}; ", "cd sub && ", "cd .. && ", "cd {MISSING} && ",
+    "cd {NOTREPO} && ", "cd {WT1} && ", "cd ~ && ", "cd ~/repo && ", "cd - && ", "cd -- ", "pushd x; ", "popd; ",
+    "sh -c ", "bash -lc ", "/bin/zsh ", "GIT_DIR=x ", "GIT_WORK_TREE=x ", "GIT_INDEX_FILE=x ", "echo ", "{A}", "{B}",
+    "{SUB}", "{ROOT}/", "sub", "..", "make -C {B} ", "\r",
+) + UNICODE_FRAGMENTS
+
+# Python 実装の理由文のうち、hhx で意図して変えた文。Claude Code と Codex の両方に出るので、片方にしか無いツール名を外した。
+DISCARD_CHANGED_REASON = ("実行せず文字列として書きたいだけなら Write / Edit ツールを使ってください。",
+                          "実行せず文字列として書きたいだけなら、ファイルを編集するツールを使ってください。")
+
+# 既存のテストのサンドボックスの場所。記録した入力のうち、ここを差分テストのサンドボックスに差し替える。
+HARVESTED_SANDBOX = re.compile(
+    r"/[^\s'\";&|()]*?/(?:worktree-guard-test-|resolve-test-|snapshot-test-|wt-env-test-|worktree-policy-test-|"
+    r"snapshot-home-)[^/\s'\";&|()]*")
+
+
+SPACES = ("\u3000", "\xa0", "\x1c", "\x1f", "\x85", "\u2028", "\u200a", "\t", "\n", "\r", "\x0b", "\u200b")
+
+
+def respace(rng, text):
+    """text の空白のいくつかを、別の空白 (Python の \\s に当たるものと当たらないもの) に置き換え、末尾に空白を足すこともある。"""
+    text = "".join(rng.choice(SPACES) if char == " " and rng.random() < 0.4 else char for char in text)
+    return text + (rng.choice(SPACES) if rng.random() < 0.3 else "")
+
+
+@unittest.skipUnless(helpers.TARGET == "hhx", "差分テストは hhx を対象にしたときだけ流す")
+class DiscardDifferentialTest(unittest.TestCase):
+    """discard-guard の差分テスト。本物のリポジトリ (汚れたもの・きれいなもの・worktree) を cwd と cd / -C の先に使う。
+
+    Python 本体の worktree-guard.py のうち、hhx へ移さないブランチ attach の判定は無効にして比べる。
+    snapshot の作成は両方が本物の git で行う。同じ作業ツリーの一時 index を並行して使うと lock で片方が失敗するので、
+    hhx も 1 件ずつ起動する。
+    """
+
+    SCRIPT = "worktree-guard.py"
+    NAME = "discard-guard"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_python_hook(cls.SCRIPT)
+        cls.module.worktree_policy_violation = lambda _cmd, _cwd: ""
+        import test_worktree_guard
+        cls.records = harvest(test_worktree_guard)
+        # mkdtemp は macOS では /var/folders/... (実体は /private/var/...) を返すので、toplevel の表記の違いも通る。
+        cls.root = tempfile.mkdtemp(prefix="hhx-diff-discard-")
+        cls.paths = {
+            "{ROOT}": cls.root,
+            "{A}": helpers.make_repo(os.path.join(cls.root, "repoA")),
+            "{B}": helpers.make_repo(os.path.join(cls.root, "repoB")),
+            "{CLEAN}": helpers.make_repo(os.path.join(cls.root, "clean"), dirty=False),
+            "{NOTREPO}": os.path.join(cls.root, "notarepo"),
+            "{MISSING}": os.path.join(cls.root, "missing"),
+            "{MAIN}": helpers.make_repo(os.path.join(cls.root, "main"), dirty=False),
+            "{WT1}": os.path.join(cls.root, "wt1"),
+        }
+        cls.paths["{SUB}"] = helpers.make_repo(os.path.join(cls.root, "repoA", "sub"))
+        helpers.git(cls.paths["{MAIN}"], "worktree", "add", "-q", "-b", "topic1", cls.paths["{WT1}"])
+        with open(os.path.join(cls.paths["{WT1}"], "untracked.txt"), "w", encoding="utf-8") as file:
+            file.write("wt1\n")
+        for name in ("notarepo", "a", "b", os.path.join("a", "sub"), "home"):
+            os.makedirs(os.path.join(cls.root, name), exist_ok=True)
+        cls.link = os.path.join(cls.root, "link")
+        os.symlink(cls.paths["{A}"], cls.link)
+        helpers.make_repo(os.path.join(cls.root, "home", "repo"))
+        cls.saved_home, cls.saved_cwd = os.environ.get("HOME"), os.getcwd()
+        # ~ の展開と、cwd が空のときのプロセスの作業ディレクトリをサンドボックスの中に閉じる。
+        os.environ["HOME"] = os.path.join(cls.root, "home")
+        os.chdir(cls.paths["{NOTREPO}"])
+
+    @classmethod
+    def tearDownClass(cls):
+        os.chdir(cls.saved_cwd)
+        if cls.saved_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = cls.saved_home
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    def expand(self, text):
+        text = HARVESTED_SANDBOX.sub("{ROOT}", text)
+        for placeholder, value in self.paths.items():
+            text = text.replace(placeholder, value)
+        return text
+
+    def cwds(self):
+        paths = self.paths
+        return (paths["{A}"], paths["{SUB}"], paths["{B}"], paths["{CLEAN}"], paths["{NOTREPO}"], paths["{MISSING}"],
+                paths["{WT1}"], paths["{MAIN}"], self.link, os.path.realpath(paths["{A}"]), "relative", "", None, 123)
+
+    def run_python(self, raw=None, argv=None):
+        self.module.DEADLINE = time.monotonic() + self.module.TIME_BUDGET
+        decision, reason = run_python(self.module, lambda text: "git" in text, raw=raw, argv=argv)
+        return decision, reason.replace(*DISCARD_CHANGED_REASON)
+
+    def commands(self, rng, count):
+        bases = unique(self.expand(command) for _kind, command, raw, _cwd in self.records
+                       if raw is None and isinstance(command, str) and command)
+        commands = bases + [self.expand(mutate(rng, rng.choice(bases), DISCARD_FRAGMENTS, bases))
+                            for _ in range(count)]
+        commands += [self.expand("git " + random_command(rng, DISCARD_FRAGMENTS)) for _ in range(count // 3)]
+        # 空白の位置に Python と RE2 で範囲の違う空白を置く。境界の判定 (\s と $) がずれると、ここで差が出る。
+        commands += [self.expand(respace(rng, rng.choice(bases))) for _ in range(count // 3)]
+        return unique(command for command in commands if "\x00" not in command)
+
+    def test_bash_commands(self):
+        rng = random.Random(SEED + 5)
+        payloads = []
+        for command in self.commands(rng, CASES // 2):
+            cwd = rng.choice(self.cwds())
+            payload = {"session_id": "diff", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                       "tool_input": {"command": command}}
+            if cwd is not None:
+                payload["cwd"] = cwd
+            payloads.append(json.dumps(payload, ensure_ascii=False))
+        compare(self, "discard-guard (Bash)", payloads, lambda raw: self.run_python(raw=raw),
+                lambda raw: run_hhx(self.NAME, raw=raw, cwd=self.paths["{NOTREPO}"]), workers=1)
+
+    def test_detection(self):
+        """検出 (発火したルールのラベル) だけを比べる。
+
+        cwd が存在しなければ、ルールに当たったコマンドは必ず特定できないものとして deny になり、理由文にラベルが出る。
+        上の比較では、snapshot を作って通したのか、ルールに当たらず素通りしたのかを区別できないため。git を起動しないので並行して流せる。
+        """
+        rng = random.Random(SEED + 7)
+        payloads = [json.dumps({"tool_input": {"command": command}, "cwd": self.paths["{MISSING}"]}, ensure_ascii=False)
+                    for command in self.commands(rng, CASES)]
+        compare(self, "discard-guard (detection)", payloads, lambda raw: self.run_python(raw=raw),
+                lambda raw: run_hhx(self.NAME, raw=raw, cwd=self.paths["{NOTREPO}"]))
+
+    def test_recorded_payloads_and_argv(self):
+        """既存のテストが渡している payload と、argv の経路 (cwd はプロセスの作業ディレクトリ)。"""
+        rng = random.Random(SEED + 6)
+        raws = [self.expand(raw) for _kind, _command, raw, _cwd in self.records if raw is not None]
+        raws += ['{"tool_input": {"command": "git reset --hard"}}', '{"tool_input": {"command": ["git reset --hard"]}}',
+                 '{"tool_input": {"command": "git reset --hard"}, "cwd": 1}', '"git reset --hard"', "git reset --hard",
+                 '{"tool_input": {"command": "git reset --hard"}, "cwd": "/tmp/\\u0000x"}', "null", "[]"]
+        compare(self, "discard-guard (payload)", unique(raws), lambda raw: self.run_python(raw=raw),
+                lambda raw: run_hhx(self.NAME, raw=raw, cwd=self.paths["{NOTREPO}"]), workers=1)
+        for directory in (self.paths["{NOTREPO}"], self.paths["{A}"]):
+            os.chdir(directory)
+            argvs = self.commands(rng, CASES // 10)
+            compare(self, f"discard-guard (argv in {os.path.basename(directory)})", argvs,
+                    lambda argv: self.run_python(argv=argv),
+                    lambda argv, cwd=directory: run_hhx(self.NAME, argv=argv, cwd=cwd), workers=1)
+        os.chdir(self.paths["{NOTREPO}"])
 
 
 if __name__ == "__main__":

@@ -25,6 +25,8 @@ HHX_COMPAT_TARGET=python HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレク�
 入力は既存のテストがフックに渡している入力と、それに境界の断片（区切り文字・クォート・`>`・`.pub`・`.env.<x>`・
 Unicode の空白や語の文字など）を差し込んだ変形である。`HHX_DIFF_SEED` で乱数の種を、`HHX_DIFF_CASES` で変形の数を変えられる。
 意図して仕様を変えた入力（irreversible-guard の G 類の旧保護対象と hhx 自身のパス）は比べない。
+discard-guard は、Python 本体（worktree-guard.py）のブランチ attach の判定を無効にして比べ、理由文で意図して変えた 1 文は置き換えてから比べる。
+snapshot は両方が本物の git でサンドボックスのリポジトリに作るので、同じ一時 index の lock で競合しないよう hhx も 1 件ずつ起動する。
 
 ```sh
 HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレクトリ> make compat-test
@@ -62,3 +64,8 @@ HHX_COMPAT_PYTHON_HOOKS=<Python 本体のディレクトリ> make compat-test
 - `test_irreversible_guard.py` の G 類（ガードファイル）は、保護対象を hhx の実行ファイル・`~/.config/hhx`・hook の登録ファイルに
   置き換えた。旧配布先（`~/.claude/hooks`・`~/.codex/hooks`）と dotfiles の正本は、hhx では通過を期待し、Python では元の deny のまま流す。
   `WT_AGENT_WORKTREE_POLICY` を前提にした `OnDemandFileToolPassThroughTest` は、hhx では skip する。
+- `test_worktree_guard.py` は、hhx では snapshot の ref・作成者・一時 index の名前を新しい値（`refs/hhx/discard-snapshot`、
+  `hhx <hhx@localhost>`、`hhx-discard-snapshot.index`）で確かめる。`helpers.snapshot_ref_exists` の既定の ref も同じく切り替える。
+  ブランチ attach の deny（`DetachedWorktreePolicyTest`）は wx へ移るので、hhx では skip する。
+  `PassThroughTest` の「ルールが発火したか」は、hhx では存在しない cwd で起動したときの理由文のラベルから読む。
+  `MainWorkspacePassThroughTest` は hhx でもそのまま流す（`WT_AGENT_WORKTREE_POLICY` は hhx では意味を持たない）。
