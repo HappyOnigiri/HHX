@@ -159,6 +159,9 @@ func asCount(language i18n.Language, text string) (int, error) {
 	return count, nil
 }
 
+// workflowCountQuery は dynamic/ の workflow を除いた workflow の数を返す jq の式である。
+const workflowCountQuery = `.total_count - ([.workflows[] | select(.path | startswith("dynamic/"))] | length)`
+
 // CIEvidence はこの repo で check が動く形跡があれば真を返す。判定できなければ *FetchError を返す。
 //
 // 根拠は 2 つ取る。Actions の workflow が 1 つでも登録されているか、直近の merged PR に
@@ -166,8 +169,12 @@ func asCount(language i18n.Language, text string) (int, error) {
 // (Vercel・Codecov 等) しか持たない repo を「CI 無し」と誤判定しないためである。
 // どちらかの問い合わせが失敗したら、片方だけで「無い」と決めずに判定不能として返す。
 // ここで誤って「無い」と答えると、実在する CI の失敗を見落とすことになる。
+//
+// workflow の数からは、GitHub が自動で登録する path が `dynamic/` の workflow
+// (Copilot cloud agent 等) を除く。PR の check を作らないのに、CI の無い repo にも現れるためである。
+// 除くのは取得した 1 ページ目に見えたものだけにし、ページの外の workflow は形跡として数える。
 func (g GH) CIEvidence() (bool, error) {
-	output, err := g.capture([]string{"api", "repos/{owner}/{repo}/actions/workflows", "--jq", ".total_count"})
+	output, err := g.capture([]string{"api", "repos/{owner}/{repo}/actions/workflows", "--jq", workflowCountQuery})
 	if err != nil {
 		return false, err
 	}
