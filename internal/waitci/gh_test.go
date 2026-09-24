@@ -3,6 +3,7 @@ package waitci
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -188,9 +189,32 @@ func TestRegisteredWorkflowIsEnough(t *testing.T) {
 	if err != nil || !found || len(runner.calls) != 1 {
 		t.Fatalf("found=%v err=%v calls=%q", found, err, runner.calls)
 	}
-	want := []string{"gh", "api", "repos/{owner}/{repo}/actions/workflows", "--jq", ".total_count"}
+	want := []string{"gh", "api", "repos/{owner}/{repo}/actions/workflows", "--jq", workflowCountQuery}
 	if !reflect.DeepEqual(runner.calls[0], want) {
 		t.Fatalf("calls=%q", runner.calls)
+	}
+}
+
+func TestWorkflowCountQueryIgnoresDynamicWorkflows(t *testing.T) {
+	jq, err := exec.LookPath("jq")
+	if err != nil {
+		t.Skip("jq が無い")
+	}
+	for _, tc := range []struct {
+		name, response, want string
+	}{
+		{"none", `{"total_count":0,"workflows":[]}`, "0"},
+		{"dynamic only", `{"total_count":1,"workflows":[{"path":"dynamic/copilot-swe-agent/copilot"}]}`, "0"},
+		{"mixed", `{"total_count":2,"workflows":[{"path":"dynamic/pages/pages-build-deployment"},{"path":".github/workflows/ci.yml"}]}`, "1"},
+		// ページの外の workflow は中身が分からないので形跡として数える。
+		{"beyond the page", `{"total_count":40,"workflows":[{"path":"dynamic/copilot-swe-agent/copilot"}]}`, "39"},
+	} {
+		command := exec.CommandContext(t.Context(), jq, workflowCountQuery)
+		command.Stdin = strings.NewReader(tc.response)
+		output, err := command.Output()
+		if err != nil || strings.TrimSpace(string(output)) != tc.want {
+			t.Errorf("%s: output=%q err=%v", tc.name, output, err)
+		}
 	}
 }
 
