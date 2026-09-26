@@ -98,11 +98,13 @@ func newRepositories(t *testing.T) repositories {
 	if err := os.Mkdir(plain, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return repositories{
+	repos := repositories{
 		github: hooktest.GitRepo(t, filepath.Join(root, "github"), "https://github.com/owner/repo.git", false),
 		other:  hooktest.GitRepo(t, filepath.Join(root, "gitlab"), "git@gitlab.com:owner/repo.git", false),
 		plain:  plain,
 	}
+	hooktest.Git(t, repos.github, "symbolic-ref", "HEAD", "refs/heads/feature")
+	return repos
 }
 
 func mustContain(t *testing.T, text string, parts ...string) {
@@ -133,6 +135,34 @@ func TestPushInjectsBashGuidance(t *testing.T) {
 		messages.Text(hooktest.Language, idGuidance, map[string]any{"Command": waitCommand, "Order": messages.T(hooktest.Language, idOrder)}),
 		"timeout:600000", "`hhx wait-ci --progress`\n")
 	mustNotContain(t, context, "functions.exec", "write_stdin")
+}
+
+func TestMainPushDoesNotInject(t *testing.T) {
+	repos := newRepositories(t)
+	hooktest.Git(t, repos.github, "symbolic-ref", "HEAD", "refs/heads/main")
+	for _, testCase := range []struct {
+		command  string
+		response any
+	}{
+		{"git push", nil},
+		{"git push origin HEAD", nil},
+		{"git push origin main", nil},
+		{"git push origin feature:main", nil},
+		{"git push origin HEAD", map[string]any{"stderr": "To github.com:owner/repo.git\n   abc..def  main -> main\n"}},
+	} {
+		if context, ok := inject(t, testCase.command, call{cwd: repos.github, response: testCase.response}); ok {
+			t.Errorf("%q injected %q", testCase.command, context)
+		}
+	}
+	for _, command := range []string{"git push origin feature", "git push origin HEAD:feature", "gh pr create --fill"} {
+		if _, ok := inject(t, command, call{cwd: repos.github}); !ok {
+			t.Errorf("%q must inject", command)
+		}
+	}
+	if _, ok := inject(t, "git push origin main", call{cwd: repos.github,
+		response: map[string]any{"stderr": "To github.com:owner/repo.git\n   abc..def  feature -> feature\n"}}); !ok {
+		t.Fatal("push result must take precedence over the command")
+	}
 }
 
 func TestCodexGetsTheCodeModeWaitLoop(t *testing.T) {
@@ -233,7 +263,7 @@ func TestSilentCases(t *testing.T) {
 func TestGitHubPushOutputBeatsANonGitHubCwd(t *testing.T) {
 	repos := newRepositories(t)
 	context, ok := inject(t, "git push origin HEAD", call{cwd: repos.other,
-		response: map[string]any{"exit_code": 0, "stderr": "To github.com:owner/repo.git"}})
+		response: map[string]any{"exit_code": 0, "stderr": "To github.com:owner/repo.git\n   abc..def  feature -> feature\n"}})
 	if !ok {
 		t.Fatal("a push to GitHub must inject even from a non-GitHub cwd")
 	}

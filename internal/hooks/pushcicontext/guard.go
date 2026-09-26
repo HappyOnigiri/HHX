@@ -103,6 +103,9 @@ func run(c *hookrt.Context) error {
 	if input.event == "PostToolUse" && !toolresponse.Succeeded(input.response) {
 		return nil
 	}
+	if trigger == pushOrPR && isMainPush(input) {
+		return nil
+	}
 	// workflow dispatch は `-R owner/repo` で Git リポジトリの外からも実行できる。
 	// push / PR 作成は、結果が GitHub を指していればその時点で確定する。指していない場合だけ cwd を見る。
 	if trigger == pushOrPR && !strings.Contains(py.Lower(toolresponse.Text(input.response)), "github.com") {
@@ -330,6 +333,67 @@ func triggerKind(command string) kind {
 		}
 	}
 	return none
+}
+
+var pushedRefRE = regexp.MustCompile(`(?m)\b\S+\s+->\s+(\S+)`)
+
+// isMainPush は push 先が main だけだと確認できた場合に限り案内を止める。
+// push の結果があれば送信先を優先し、結果から読めなければ refspec と現在のブランチを使う。
+func isMainPush(input *invocation) bool {
+	if input.event == "PostToolUse" {
+		matches := pushedRefRE.FindAllStringSubmatch(toolresponse.Text(input.response), -1)
+		if len(matches) > 0 {
+			for _, match := range matches {
+				if match[1] != "main" && match[1] != "refs/heads/main" {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	for _, tokens := range commandSegments(input.command) {
+		if executable(tokens) != "git" || !contains(lowered(tokens), "push") {
+			continue
+		}
+		push := -1
+		for index, token := range tokens {
+			if py.Lower(token) == "push" {
+				push = index
+				break
+			}
+		}
+		if push < 0 {
+			continue
+		}
+		var positional []string
+		for _, token := range tokens[push+1:] {
+			if !strings.HasPrefix(token, "-") {
+				positional = append(positional, token)
+			}
+		}
+		if len(positional) >= 2 {
+			for _, refspec := range positional[1:] {
+				destination := refspec
+				if _, after, ok := strings.Cut(refspec, ":"); ok {
+					destination = after
+				}
+				if destination != "main" && destination != "refs/heads/main" && destination != "HEAD" {
+					return false
+				}
+				if destination == "HEAD" && !currentMainBranch(input.cwd) {
+					return false
+				}
+			}
+			return true
+		}
+		return currentMainBranch(input.cwd)
+	}
+	return false
+}
+
+func currentMainBranch(cwd string) bool {
+	branch, ok := hookexec.Output(cwd, gitTimeout, "git", "symbolic-ref", "-q", "--short", "HEAD")
+	return ok && py.Strip(branch) == "main"
 }
 
 func hasColonPrefix(tokens []string) bool {
