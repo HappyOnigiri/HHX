@@ -260,7 +260,7 @@ func TestWaitCIPassesTheOptionsToTheWaiter(t *testing.T) {
 	installFakeWaitCI(t, fake)
 	runCommand(t, "", "wait-ci", "213")
 	got := [5]int{fake.waiter.Interval, fake.waiter.Timeout, fake.waiter.StartTimeout, fake.waiter.Settle, fake.waiter.NoCITimeout}
-	if got != [5]int{20, 1800, 300, 30, 45} || fake.waiter.Progress != nil || fake.waiter.HasCI == nil {
+	if got != [5]int{20, 1800, 300, 30, 20} || fake.waiter.Progress != nil || fake.waiter.HasCI == nil {
 		t.Fatalf("defaults=%v", got)
 	}
 	runCommand(t, "", "wait-ci", "--interval=2", "--timeout", "3", "--start-timeout", "4", "--settle", "5",

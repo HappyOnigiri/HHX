@@ -623,9 +623,52 @@ func (f *fakeHasCI) call() (bool, error) {
 func TestAbsentCIEndsTheWatchEarly(t *testing.T) {
 	hasCI := &fakeHasCI{}
 	waiter, clock := makeWaiter([]poll{{head: "sha"}},
-		func(w *Waiter) { w.StartTimeout = 100; w.NoCITimeout = 30; w.HasCI = hasCI.call })
+		func(w *Waiter) { w.Interval = 20; w.StartTimeout = 100; w.NoCITimeout = 20; w.HasCI = hasCI.call })
+	fetches := 0
+	fetch := waiter.Fetch
+	waiter.Fetch = func() (Snapshot, error) {
+		fetches++
+		return fetch()
+	}
 	outcome := waiter.Run()
-	if outcome.Status != StatusNoCI || outcome.Elapsed != 30 || clock.value != 30*time.Second || hasCI.calls != 1 {
+	if outcome.Status != StatusNoCI || outcome.Elapsed != 20 || clock.value != 20*time.Second || fetches != 2 || hasCI.calls != 1 {
+		t.Fatalf("outcome=%+v clock=%v fetches=%d evidence calls=%d", outcome, clock.value, fetches, hasCI.calls)
+	}
+}
+
+func TestAbsentCINearTheFirstRetryBoundary(t *testing.T) {
+	hasCI := &fakeHasCI{}
+	waiter, clock := makeWaiter([]poll{{head: "sha"}}, func(w *Waiter) {
+		w.Interval = 20
+		w.NoCITimeout = 20
+		w.HasCI = hasCI.call
+	})
+	fetches := 0
+	fetch := waiter.Fetch
+	waiter.Fetch = func() (Snapshot, error) {
+		fetches++
+		if fetches == 1 {
+			clock.value += 999 * time.Millisecond
+		}
+		return fetch()
+	}
+	outcome := waiter.Run()
+	if outcome.Status != StatusNoCI || outcome.Elapsed != 20 || clock.value != 20*time.Second+999*time.Millisecond || fetches != 2 {
+		t.Fatalf("outcome=%+v clock=%v fetches=%d", outcome, clock.value, fetches)
+	}
+}
+
+func TestCheckAtFirstRetryIsNotJudgedAbsent(t *testing.T) {
+	hasCI := &fakeHasCI{}
+	check := rollup(checkRun("build", "IN_PROGRESS", ""))
+	waiter, clock := makeWaiter([]poll{{head: "sha"}, {head: "sha", rollup: check}}, func(w *Waiter) {
+		w.Interval = 20
+		w.NoCITimeout = 20
+		w.HasCI = hasCI.call
+		w.Timeout = 40
+	})
+	outcome := waiter.Run()
+	if outcome.Status != StatusTimeout || outcome.Elapsed != 40 || clock.value != 40*time.Second || hasCI.calls != 0 {
 		t.Fatalf("outcome=%+v clock=%v calls=%d", outcome, clock.value, hasCI.calls)
 	}
 }
