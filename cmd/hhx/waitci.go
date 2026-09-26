@@ -96,7 +96,7 @@ func newWaitCIFlags(language i18n.Language, options *waitCIOptions) *pflag.FlagS
 	intFlag(&options.timeout, "timeout", 1800, text(idFlagTimeout))
 	intFlag(&options.startTimeout, "start-timeout", 300, text(idFlagStart))
 	intFlag(&options.settle, "settle", 30, text(idFlagSettle))
-	intFlag(&options.noCITimeout, "no-ci-timeout", 45, text(idFlagNoCI))
+	intFlag(&options.noCITimeout, "no-ci-timeout", 20, text(idFlagNoCI))
 	intFlag(&options.prLookupTimeout, "pr-lookup-timeout", 60, text(idFlagPRLookup))
 	flags.BoolVarP(&options.progress, "progress", "v", false, text(idFlagProgress))
 	flags.BoolVar(&options.allChecks, "all-checks", false, text(idFlagAllChecks))
