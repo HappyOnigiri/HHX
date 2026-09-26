@@ -14,11 +14,12 @@ import (
 // scriptedRunner は git と gh の呼び出しを argv で振り分けて答える。gh の応答は argv の接頭辞ごとに順に返す。
 type scriptedRunner struct {
 	// branch が空なら detached HEAD、repo が偽なら git 管理下でない。
-	repo   bool
-	branch string
-	head   string
-	gh     map[string][]waitci.Result
-	calls  []string
+	repo     bool
+	branch   string
+	head     string
+	mainHead string
+	gh       map[string][]waitci.Result
+	calls    []string
 }
 
 func (s *scriptedRunner) Run(name string, args []string, _ time.Duration) (waitci.Result, error) {
@@ -33,6 +34,8 @@ func (s *scriptedRunner) Run(name string, args []string, _ time.Duration) (waitc
 			return ok(".git")
 		case args[0] == "rev-parse" && args[1] == "HEAD":
 			return ok(s.head)
+		case args[0] == "rev-parse" && args[1] == "refs/remotes/origin/main" && s.mainHead != "":
+			return ok(s.mainHead)
 		case args[0] == "symbolic-ref" && s.branch != "":
 			return ok(s.branch)
 		}
@@ -123,6 +126,40 @@ func TestWaitCIRepositoryWithoutCIIsNotATimeout(t *testing.T) {
 	code, stdout, _ := runCommand(t, "", "wait-ci", "213")
 	if code != 0 || lines(stdout)[0] != "wait-ci: "+messages.Text(testLanguage, idNoCI, map[string]any{"Elapsed": 45}) {
 		t.Fatalf("code=%d stdout=%q", code, stdout)
+	}
+}
+
+func TestWaitCIOnMainReturnsWithoutWatching(t *testing.T) {
+	fake := &fakeWaitCI{runner: &scriptedRunner{repo: true, branch: "main", head: strings.Repeat("B", 40)}}
+	installFakeWaitCI(t, fake)
+	code, stdout, _ := runCommand(t, "", "wait-ci", "--progress")
+	want := []string{"wait-ci: " + messages.T(testLanguage, idMainNoPR), "wait-ci: exit=0 failed=0 total=0"}
+	if code != 0 || !reflect.DeepEqual(lines(stdout), want) || fake.watched != 0 || fake.clock.slept != 0 {
+		t.Fatalf("code=%d stdout=%q watched=%d slept=%v", code, stdout, fake.watched, fake.clock.slept)
+	}
+	for _, call := range fake.runner.calls {
+		if strings.HasPrefix(call, "gh ") {
+			t.Fatalf("unexpected GitHub call: %s", call)
+		}
+	}
+	fake.outcome = outcome(waitci.StatusComplete, passed)
+	if code, _, _ := runCommand(t, "", "wait-ci", "213"); code != 0 || fake.watched != 1 {
+		t.Fatalf("explicit PR reference was not watched: code=%d watched=%d", code, fake.watched)
+	}
+}
+
+func TestWaitCIOnDetachedMainReturnsWithoutLookingForPR(t *testing.T) {
+	sha := strings.Repeat("A", 40)
+	fake := &fakeWaitCI{runner: &scriptedRunner{repo: true, head: sha, mainHead: sha}}
+	installFakeWaitCI(t, fake)
+	code, stdout, _ := runCommand(t, "", "wait-ci", "--progress")
+	if code != 0 || lines(stdout)[0] != "wait-ci: "+messages.T(testLanguage, idMainNoPR) || fake.watched != 0 {
+		t.Fatalf("code=%d stdout=%q watched=%d", code, stdout, fake.watched)
+	}
+	for _, call := range fake.runner.calls {
+		if strings.HasPrefix(call, "gh ") {
+			t.Fatalf("unexpected GitHub call: %s", call)
+		}
 	}
 }
 

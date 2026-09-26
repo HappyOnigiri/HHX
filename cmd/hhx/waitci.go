@@ -236,6 +236,20 @@ func runWaitCI(args []string, stdout, stderr io.Writer) int {
 
 	git := waitci.Git{Runner: adapters.runner}
 	gh := waitci.GH{Runner: adapters.runner, Language: language}
+	branch := ""
+	if options.reference == "" {
+		branch = git.Output("symbolic-ref", "-q", "--short", "HEAD")
+	}
+	// detached worktree から HEAD:main を push した直後も、更新済みの origin/main と HEAD で判定する。
+	mainHead := branch == "main"
+	if options.reference == "" && branch == "" && git.Output("rev-parse", "--git-dir") != "" {
+		sha := git.HeadSHA()
+		mainHead = sha != "" && sha == git.Output("rev-parse", "refs/remotes/origin/main")
+	}
+	if mainHead {
+		verdict(idMainNoPR, nil)
+		return finish(0, 0, 0)
+	}
 	detached := waitci.IsDetached(options.reference, git.Output)
 	reference := options.reference
 	sha := options.sha

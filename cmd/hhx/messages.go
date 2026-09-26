@@ -54,6 +54,7 @@ const (
 	idHeadTimeout    = "wait-ci.head-timeout"
 	idConflictNoRun  = "wait-ci.conflict-no-checks"
 	idNoCI           = "wait-ci.no-ci"
+	idMainNoPR       = "wait-ci.main-no-pr"
 	idEmptyTimeout   = "wait-ci.empty-timeout"
 	idTimeout        = "wait-ci.timeout"
 	idFailed         = "wait-ci.failed"
@@ -206,6 +207,11 @@ var messages = i18n.Register(i18n.Catalog{
 			"and no workflow or checks on recently merged PRs); skipped watching",
 		JA: "この repo には CI が無い (check が 0 件のまま {{.Elapsed}}s 経ち、" +
 			"workflow も直近の merged PR の check も見つからない)。監視をスキップした",
+	},
+	// main への直接 push は PR の check を持たないので、PR の監視を始めない。
+	idMainNoPR: {
+		EN: "a direct push to main has no PR checks to watch; skipped watching",
+		JA: "main への直接 push には監視する PR の CI が無い。監視をスキップした",
 	},
 	idEmptyTimeout: {
 		EN: "no check was registered after waiting {{.Elapsed}}s",
